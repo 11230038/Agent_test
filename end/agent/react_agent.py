@@ -16,6 +16,15 @@ class ReactAgent:
             middleware=[monitor_tool, log_before_model, report_prompt_switch],
         )
 
+    def execute(self, query: str):
+        final_answer = ""
+
+        for chunk in self.execute_stream(query):
+            if chunk.strip():
+                final_answer = chunk.strip()
+
+        return final_answer
+
     def execute_stream(self, query: str):
         input_dict = {
             "messages": [
