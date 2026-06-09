@@ -1,0 +1,10 @@
+collection_name: agent #向量存储表名
+persist_directory: rag/chroma_db
+k: 3  #返回的匹配结果数
+data_path: data
+md5_hex_store: md5.text
+allow_knowledge_file_type: [".pdf",".txt"]
+
+chunk_size: 200 #向量分块大小
+chunk_overlap: 20 #向量分块重叠大小
+separators: ["\n","\n\n","。","？","！","；",".","!","?",";"]

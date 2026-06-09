@@ -1,0 +1,30 @@
+2026-03-11 10:03:19 INFO [agent] vector_store.py:29 开始加载文档...
+2026-03-11 10:03:19 INFO [agent] vector_store.py:52 数据目录：C:\Users\鄭昊\Desktop\Agent\data
+2026-03-11 10:03:19 INFO [agent] vector_store.py:53 允许的文件类型：['.pdf', '.txt']
+2026-03-11 10:03:19 INFO [agent] vector_store.py:63 找到 6 个文件待处理
+2026-03-11 10:03:19 INFO [agent] vector_store.py:69 内容已存在:C:\Users\鄭昊\Desktop\Agent\data\扫地机器人100问.pdf
+2026-03-11 10:03:19 INFO [agent] vector_store.py:69 内容已存在:C:\Users\鄭昊\Desktop\Agent\data\扫地机器人100问2.txt
+2026-03-11 10:03:19 INFO [agent] vector_store.py:69 内容已存在:C:\Users\鄭昊\Desktop\Agent\data\扫拖一体机器人100问.txt
+2026-03-11 10:03:19 INFO [agent] vector_store.py:69 内容已存在:C:\Users\鄭昊\Desktop\Agent\data\故障排除.txt
+2026-03-11 10:03:19 INFO [agent] vector_store.py:69 内容已存在:C:\Users\鄭昊\Desktop\Agent\data\维护保养.txt
+2026-03-11 10:03:19 INFO [agent] vector_store.py:69 内容已存在:C:\Users\鄭昊\Desktop\Agent\data\选购指南.txt
+2026-03-11 10:03:50 INFO [agent] vector_store.py:29 开始加载文档...
+2026-03-11 10:03:50 INFO [agent] vector_store.py:52 数据目录：C:\Users\鄭昊\Desktop\Agent\data
+2026-03-11 10:03:50 INFO [agent] vector_store.py:53 允许的文件类型：['.pdf', '.txt']
+2026-03-11 10:03:50 INFO [agent] vector_store.py:63 找到 6 个文件待处理
+2026-03-11 10:03:50 INFO [agent] vector_store.py:69 内容已存在:C:\Users\鄭昊\Desktop\Agent\data\扫地机器人100问.pdf
+2026-03-11 10:03:50 INFO [agent] vector_store.py:69 内容已存在:C:\Users\鄭昊\Desktop\Agent\data\扫地机器人100问2.txt
+2026-03-11 10:03:50 INFO [agent] vector_store.py:69 内容已存在:C:\Users\鄭昊\Desktop\Agent\data\扫拖一体机器人100问.txt
+2026-03-11 10:03:50 INFO [agent] vector_store.py:69 内容已存在:C:\Users\鄭昊\Desktop\Agent\data\故障排除.txt
+2026-03-11 10:03:50 INFO [agent] vector_store.py:69 内容已存在:C:\Users\鄭昊\Desktop\Agent\data\维护保养.txt
+2026-03-11 10:03:50 INFO [agent] vector_store.py:69 内容已存在:C:\Users\鄭昊\Desktop\Agent\data\选购指南.txt
+2026-03-11 10:04:06 INFO [agent] vector_store.py:29 开始加载文档...
+2026-03-11 10:04:06 INFO [agent] vector_store.py:52 数据目录：C:\Users\鄭昊\Desktop\Agent\data
+2026-03-11 10:04:06 INFO [agent] vector_store.py:53 允许的文件类型：['.pdf', '.txt']
+2026-03-11 10:04:06 INFO [agent] vector_store.py:63 找到 6 个文件待处理
+2026-03-11 10:04:06 INFO [agent] vector_store.py:69 内容已存在:C:\Users\鄭昊\Desktop\Agent\data\扫地机器人100问.pdf
+2026-03-11 10:04:06 INFO [agent] vector_store.py:69 内容已存在:C:\Users\鄭昊\Desktop\Agent\data\扫地机器人100问2.txt
+2026-03-11 10:04:06 INFO [agent] vector_store.py:69 内容已存在:C:\Users\鄭昊\Desktop\Agent\data\扫拖一体机器人100问.txt
+2026-03-11 10:04:06 INFO [agent] vector_store.py:69 内容已存在:C:\Users\鄭昊\Desktop\Agent\data\故障排除.txt
+2026-03-11 10:04:06 INFO [agent] vector_store.py:69 内容已存在:C:\Users\鄭昊\Desktop\Agent\data\维护保养.txt
+2026-03-11 10:04:06 INFO [agent] vector_store.py:69 内容已存在:C:\Users\鄭昊\Desktop\Agent\data\选购指南.txt

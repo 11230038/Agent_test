@@ -1,0 +1,109 @@
+2026-06-08 21:50:50 INFO [agent] middleware.py:41 [log_before_model]即将调用模型，带有1条消息。
+2026-06-08 21:50:50 DEBUG [agent] middleware.py:43 [log_before_model]HumanMessage | 你好
+2026-06-08 21:57:21 INFO [agent] middleware.py:41 [log_before_model]即将调用模型，带有1条消息。
+2026-06-08 21:57:21 DEBUG [agent] middleware.py:43 [log_before_model]HumanMessage | 你好
+2026-06-08 22:03:20 INFO [agent] middleware.py:41 [log_before_model]即将调用模型，带有1条消息。
+2026-06-08 22:03:20 DEBUG [agent] middleware.py:43 [log_before_model]HumanMessage | 你好
+2026-06-08 22:10:03 INFO [agent] middleware.py:41 [log_before_model]即将调用模型，带有1条消息。
+2026-06-08 22:10:03 DEBUG [agent] middleware.py:43 [log_before_model]HumanMessage | 你好
+2026-06-08 22:13:55 INFO [agent] middleware.py:41 [log_before_model]即将调用模型，带有1条消息。
+2026-06-08 22:13:55 DEBUG [agent] middleware.py:43 [log_before_model]HumanMessage | 请先介绍一下你自己，再告诉我北京今天天气怎么样。
+2026-06-08 22:25:31 INFO [agent] middleware.py:41 [log_before_model]即将调用模型，带有1条消息。
+2026-06-08 22:25:31 DEBUG [agent] middleware.py:43 [log_before_model]HumanMessage | 请先介绍一下你自己，再告诉我北京今天天气怎么样。
+2026-06-08 22:25:36 INFO [agent] middleware.py:22 工具执行开始:get_weather
+2026-06-08 22:25:36 INFO [agent] middleware.py:23 工具执行参数:{'city': '北京'}
+2026-06-08 22:25:36 INFO [agent] middleware.py:25 工具执行结束:get_weather
+2026-06-08 22:25:36 INFO [agent] middleware.py:41 [log_before_model]即将调用模型，带有3条消息。
+2026-06-08 22:25:36 DEBUG [agent] middleware.py:43 [log_before_model]ToolMessage | 今天北京的天气是雨夹雪
+2026-06-08 22:25:59 INFO [agent] middleware.py:41 [log_before_model]即将调用模型，带有1条消息。
+2026-06-08 22:25:59 DEBUG [agent] middleware.py:43 [log_before_model]HumanMessage | 你好
+2026-06-08 22:26:08 INFO [agent] middleware.py:41 [log_before_model]即将调用模型，带有1条消息。
+2026-06-08 22:26:08 DEBUG [agent] middleware.py:43 [log_before_model]HumanMessage | WIFI
+2026-06-08 22:26:17 INFO [agent] middleware.py:22 工具执行开始:rag_summarize
+2026-06-08 22:26:17 INFO [agent] middleware.py:23 工具执行参数:{'query': '扫地机器人 Wi-Fi 连接 配网 失败 5G'}
+2026-06-08 22:26:17 INFO [agent] middleware.py:25 工具执行结束:rag_summarize
+2026-06-08 22:26:26 INFO [agent] middleware.py:41 [log_before_model]即将调用模型，带有3条消息。
+2026-06-08 22:26:26 DEBUG [agent] middleware.py:43 [log_before_model]ToolMessage | 提供的参考资料中未包含相关信息。
+2026-06-08 22:26:28 INFO [agent] middleware.py:22 工具执行开始:rag_summarize
+2026-06-08 22:26:28 INFO [agent] middleware.py:23 工具执行参数:{'query': '扫地机器人 网络 设置 配网'}
+2026-06-08 22:26:28 INFO [agent] middleware.py:25 工具执行结束:rag_summarize
+2026-06-08 22:26:36 INFO [agent] middleware.py:41 [log_before_model]即将调用模型，带有5条消息。
+2026-06-08 22:26:36 DEBUG [agent] middleware.py:43 [log_before_model]ToolMessage | 参考资料中未提及扫地机器人网络设置与配网的相关信息。
+2026-06-08 22:26:59 INFO [agent] middleware.py:41 [log_before_model]即将调用模型，带有1条消息。
+2026-06-08 22:26:59 DEBUG [agent] middleware.py:43 [log_before_model]HumanMessage | 迷路
+2026-06-08 22:27:07 INFO [agent] middleware.py:22 工具执行开始:rag_summarize
+2026-06-08 22:27:07 INFO [agent] middleware.py:23 工具执行参数:{'query': '扫地机器人迷路 无法回充 定位失败 解决办法'}
+2026-06-08 22:27:07 INFO [agent] middleware.py:25 工具执行结束:rag_summarize
+2026-06-08 22:27:17 INFO [agent] middleware.py:41 [log_before_model]即将调用模型，带有3条消息。
+2026-06-08 22:27:17 DEBUG [agent] middleware.py:43 [log_before_model]ToolMessage | 提供的参考资料中未包含扫地机器人迷路、无法回充、定位失败的解决办法。
+2026-06-08 22:27:21 INFO [agent] middleware.py:22 工具执行开始:rag_summarize
+2026-06-08 22:27:21 INFO [agent] middleware.py:23 工具执行参数:{'query': '扫地机器人常见故障 传感器清洁 建图异常'}
+2026-06-08 22:27:21 INFO [agent] middleware.py:25 工具执行结束:rag_summarize
+2026-06-08 22:27:21 INFO [agent] middleware.py:22 工具执行开始:rag_summarize
+2026-06-08 22:27:21 INFO [agent] middleware.py:23 工具执行参数:{'query': '扫地机器人常见故障 传感器清洁 建图异常'}
+2026-06-08 22:27:21 INFO [agent] middleware.py:25 工具执行结束:rag_summarize
+2026-06-08 22:27:30 INFO [agent] middleware.py:41 [log_before_model]即将调用模型，带有6条消息。
+2026-06-08 22:27:30 DEBUG [agent] middleware.py:43 [log_before_model]ToolMessage | 提供的参考资料中未包含关于扫地机器人常见故障、传感器清洁和建图异常的相关信息。
+2026-06-08 22:27:38 INFO [agent] middleware.py:22 工具执行开始:rag_summarize
+2026-06-08 22:27:38 INFO [agent] middleware.py:23 工具执行参数:{'query': '扫地机器人导航 激光雷达 视觉导航 环境干扰 强光'}
+2026-06-08 22:27:38 INFO [agent] middleware.py:22 工具执行开始:rag_summarize
+2026-06-08 22:27:38 INFO [agent] middleware.py:25 工具执行结束:rag_summarize
+2026-06-08 22:27:38 INFO [agent] middleware.py:23 工具执行参数:{'query': '扫地机器人导航 激光雷达 视觉导航 环境干扰 强光'}
+2026-06-08 22:27:38 INFO [agent] middleware.py:22 工具执行开始:rag_summarize
+2026-06-08 22:27:38 INFO [agent] middleware.py:25 工具执行结束:rag_summarize
+2026-06-08 22:27:38 INFO [agent] middleware.py:23 工具执行参数:{'query': '扫地机器人导航 激光雷达 视觉导航 环境干扰 强光'}
+2026-06-08 22:27:38 INFO [agent] middleware.py:22 工具执行开始:rag_summarize
+2026-06-08 22:27:38 INFO [agent] middleware.py:25 工具执行结束:rag_summarize
+2026-06-08 22:27:38 INFO [agent] middleware.py:23 工具执行参数:{'query': '扫地机器人导航 激光雷达 视觉导航 环境干扰 强光'}
+2026-06-08 22:27:38 INFO [agent] middleware.py:25 工具执行结束:rag_summarize
+2026-06-08 22:27:49 INFO [agent] middleware.py:41 [log_before_model]即将调用模型，带有11条消息。
+2026-06-08 22:27:49 DEBUG [agent] middleware.py:43 [log_before_model]ToolMessage | 提供的参考资料中未包含相关信息。
+2026-06-08 22:29:25 INFO [agent] middleware.py:41 [log_before_model]即将调用模型，带有1条消息。
+2026-06-08 22:29:25 DEBUG [agent] middleware.py:43 [log_before_model]HumanMessage | WIFI
+2026-06-08 22:29:31 INFO [agent] middleware.py:22 工具执行开始:rag_summarize
+2026-06-08 22:29:31 INFO [agent] middleware.py:23 工具执行参数:{'query': '扫地机器人WiFi连接配网及常见故障处理'}
+2026-06-08 22:29:31 INFO [agent] middleware.py:25 工具执行结束:rag_summarize
+2026-06-08 22:29:41 INFO [agent] middleware.py:41 [log_before_model]即将调用模型，带有3条消息。
+2026-06-08 22:29:41 DEBUG [agent] middleware.py:43 [log_before_model]ToolMessage | 未提供相关参考资料，无法总结扫地机器人WiFi连接配网及常见故障处理的相关信息。
+2026-06-08 22:29:47 INFO [agent] middleware.py:22 工具执行开始:rag_summarize
+2026-06-08 22:29:47 INFO [agent] middleware.py:23 工具执行参数:{'query': 'WiFi配网 网络连接失败'}
+2026-06-08 22:29:47 INFO [agent] middleware.py:25 工具执行结束:rag_summarize
+2026-06-08 22:29:56 INFO [agent] middleware.py:41 [log_before_model]即将调用模型，带有5条消息。
+2026-06-08 22:29:56 DEBUG [agent] middleware.py:43 [log_before_model]ToolMessage | 参考资料中未提及关于WiFi配网网络连接失败的相关信息。
+2026-06-08 22:29:58 INFO [agent] middleware.py:22 工具执行开始:rag_summarize
+2026-06-08 22:29:58 INFO [agent] middleware.py:23 工具执行参数:{'query': '网络设置 手机APP连接'}
+2026-06-08 22:29:58 INFO [agent] middleware.py:25 工具执行结束:rag_summarize
+2026-06-08 22:30:07 INFO [agent] middleware.py:41 [log_before_model]即将调用模型，带有7条消息。
+2026-06-08 22:30:07 DEBUG [agent] middleware.py:43 [log_before_model]ToolMessage | 提供的参考资料中未提及网络设置与手机APP连接的相关信息。
+2026-06-08 22:30:15 INFO [agent] middleware.py:22 工具执行开始:rag_summarize
+2026-06-08 22:30:15 INFO [agent] middleware.py:23 工具执行参数:{'query': '扫地机器人 配网'}
+2026-06-08 22:30:15 INFO [agent] middleware.py:25 工具执行结束:rag_summarize
+2026-06-08 22:30:21 INFO [agent] middleware.py:41 [log_before_model]即将调用模型，带有9条消息。
+2026-06-08 22:30:21 DEBUG [agent] middleware.py:43 [log_before_model]ToolMessage | 参考资料中未包含关于扫地机器人配网的相关信息。
+2026-06-08 22:30:27 INFO [agent] middleware.py:22 工具执行开始:rag_summarize
+2026-06-08 22:30:27 INFO [agent] middleware.py:23 工具执行参数:{'query': 'APP 绑定 路由器 2.4G'}
+2026-06-08 22:30:27 INFO [agent] middleware.py:25 工具执行结束:rag_summarize
+2026-06-08 22:30:35 INFO [agent] middleware.py:41 [log_before_model]即将调用模型，带有11条消息。
+2026-06-08 22:30:35 DEBUG [agent] middleware.py:43 [log_before_model]ToolMessage | 暂无相关参考资料。
+2026-06-08 22:34:15 INFO [agent] middleware.py:41 [log_before_model]即将调用模型，带有1条消息。
+2026-06-08 22:34:15 DEBUG [agent] middleware.py:43 [log_before_model]HumanMessage | 你好
+2026-06-08 22:35:01 INFO [agent] middleware.py:41 [log_before_model]即将调用模型，带有1条消息。
+2026-06-08 22:35:01 DEBUG [agent] middleware.py:43 [log_before_model]HumanMessage | WIFI
+2026-06-08 22:35:24 INFO [agent] middleware.py:41 [log_before_model]即将调用模型，带有1条消息。
+2026-06-08 22:35:24 DEBUG [agent] middleware.py:43 [log_before_model]HumanMessage | WIFI
+2026-06-08 22:36:16 INFO [agent] middleware.py:41 [log_before_model]即将调用模型，带有1条消息。
+2026-06-08 22:36:16 DEBUG [agent] middleware.py:43 [log_before_model]HumanMessage | 你好
+2026-06-08 22:37:25 INFO [agent] middleware.py:41 [log_before_model]即将调用模型，带有1条消息。
+2026-06-08 22:37:25 DEBUG [agent] middleware.py:43 [log_before_model]HumanMessage | WIFI
+2026-06-08 22:37:33 INFO [agent] middleware.py:22 工具执行开始:rag_summarize
+2026-06-08 22:37:33 INFO [agent] middleware.py:23 工具执行参数:{'query': '扫地机器人 WIFI 连接 配置 失败 频段要求'}
+2026-06-08 22:37:33 INFO [agent] middleware.py:25 工具执行结束:rag_summarize
+2026-06-08 22:37:47 INFO [agent] middleware.py:41 [log_before_model]即将调用模型，带有3条消息。
+2026-06-08 22:37:47 DEBUG [agent] middleware.py:43 [log_before_model]ToolMessage | 扫地机器人WiFi连接的频段要求是手机与机器人需连接同一2.4G网络。若配置失败，还需排查WiFi密码是否正确、机器人WiFi模块是否被遮挡，以及WiFi名称是否含有中文或特殊字符（需修改为英文或数字）。
+2026-06-08 22:38:19 INFO [agent] middleware.py:41 [log_before_model]即将调用模型，带有1条消息。
+2026-06-08 22:38:19 DEBUG [agent] middleware.py:43 [log_before_model]HumanMessage | 迷路
+2026-06-08 22:38:27 INFO [agent] middleware.py:22 工具执行开始:rag_summarize
+2026-06-08 22:38:27 INFO [agent] middleware.py:23 工具执行参数:{'query': '扫地机器人迷路 找不到回充座 定位失败 乱跑'}
+2026-06-08 22:38:27 INFO [agent] middleware.py:25 工具执行结束:rag_summarize
+2026-06-08 22:38:47 INFO [agent] middleware.py:41 [log_before_model]即将调用模型，带有3条消息。
+2026-06-08 22:38:47 DEBUG [agent] middleware.py:43 [log_before_model]ToolMessage | 针对扫地机器人迷路、定位失败、乱跑及找不到回充座的问题，可采取以下措施：对于迷路、定位失败和乱跑，需清理环境中的反光物（如镜面、抛光地砖）和移动障碍物，删除旧地图并让机器人重新建图。对于找不到回充座，需清理充电座周围障碍物，保证前方3米、左右1米无遮挡，擦拭回充传感器灰尘，检查红外信号是否正常并重新摆放充电座，或将机器人放回充电座附近重启回充。
