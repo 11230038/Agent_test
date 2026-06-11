@@ -1,6 +1,6 @@
 from fastapi.middleware.cors import CORSMiddleware
 
-from api import app
+from api import ApiResponse, app, success_response
 
 
 if not any(middleware.cls is CORSMiddleware for middleware in app.user_middleware):
@@ -13,12 +13,12 @@ if not any(middleware.cls is CORSMiddleware for middleware in app.user_middlewar
     )
 
 
-@app.get("/")
+@app.get("/", response_model=ApiResponse)
 def root():
-    return {"message": "Robot Agent API is running"}
+    return success_response("ok", {"message": "Robot Agent API is running"})
 
 
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True, timeout_keep_alive=300)

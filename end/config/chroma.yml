@@ -1,10 +1,23 @@
-collection_name: agent #向量存储表名
+collection_name: agent
 persist_directory: rag/chroma_db
-k: 3  #返回的匹配结果数
+k: 3
 data_path: data
 md5_hex_store: md5.text
 allow_knowledge_file_type: [".pdf",".txt"]
 
-chunk_size: 200 #向量分块大小
-chunk_overlap: 20 #向量分块重叠大小
-separators: ["\n","\n\n","。","？","！","；",".","!","?",";"]
+# 默认分块策略
+chunk_size: 200
+chunk_overlap: 20
+separators: ["\n\n","\n","。","？","！","；",".","!","?",";"]
+
+# 按分类差异化分块策略（未配置的分类使用默认值）
+chunk_strategies:
+  产品FAQ:
+    chunk_size: 300
+    chunk_overlap: 30
+  故障排除:
+    chunk_size: 400
+    chunk_overlap: 40
+  选购指南:
+    chunk_size: 300
+    chunk_overlap: 30

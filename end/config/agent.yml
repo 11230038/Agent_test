@@ -1,7 +1,1 @@
 external_data: data/external/records.csv
-
-# API Configuration
-api:
-  dashscope_api_key: "sk-c33a465311924e45a67830153c27543c"
-  chat_model_name: qwen3.7-max
-  embedding_model_name: text-embedding-v4

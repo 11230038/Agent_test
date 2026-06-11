@@ -1,6 +1,6 @@
 from langchain_chroma import Chroma
 from utils.config_handler import chroma_conf
-from model.factor import embed_model
+from model.factor import get_embed_model
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
 import os
@@ -9,120 +9,218 @@ from utils.file_handler import pdf_loader, txt_loader, listdir_with_allowed_type
 from utils.logger_handler import loggers
 from utils.path_tool import get_abs_path
 
+
+def _get_splitter(category: str) -> RecursiveCharacterTextSplitter:
+    """根据文档分类获取对应的分块器，未配置则使用默认值。"""
+    strategies = chroma_conf.get("chunk_strategies", {})
+    strategy = strategies.get(category, {})
+    return RecursiveCharacterTextSplitter(
+        chunk_size=strategy.get("chunk_size", chroma_conf.get("chunk_size", 200)),
+        chunk_overlap=strategy.get("chunk_overlap", chroma_conf.get("chunk_overlap", 20)),
+        separators=strategy.get("separators", chroma_conf.get("separators", ["\n\n", "\n", "。"])),
+        length_function=len,
+    )
+
+
 class VectorStoreService:
     def __init__(self):
-        # 初始化向量存储和文本分片器
-        self.vector_store=Chroma(
-            collection_name=chroma_conf["collection_name"],# 向量集合名称，从配置文件读取
-            persist_directory=chroma_conf["persist_directory"],# 持久化目录，从配置文件读取
-            embedding_function=embed_model# 嵌入模型，从配置文件读取
+        self.vector_store = Chroma(
+            collection_name=chroma_conf["collection_name"],
+            persist_directory=chroma_conf["persist_directory"],
+            embedding_function=get_embed_model(),
         )
-        self.spliter=RecursiveCharacterTextSplitter(
-            chunk_size=chroma_conf["chunk_size"],# 分片大小，从配置文件读取
-            chunk_overlap=chroma_conf["chunk_overlap"],# 分片重叠，从配置文件读取
-            separators=chroma_conf["separators"],# 分隔符，从配置文件读取
-            length_function=len,
-        )
+        # 默认分块器（兼容旧逻辑）
+        self.spliter = _get_splitter("")
+
     def get_retriever(self):
-        # 获取向量检索器，用于根据查询检索相关文档
-        # search_kwargs={"k": 3} 表示每次检索返回最相关的 3 个结果
         return self.vector_store.as_retriever(search_kwargs={"k": chroma_conf["k"]})
 
+    def search_with_scores(self, query: str, k: int | None = None) -> list[tuple[Document, float]]:
+        k = k or chroma_conf.get("k", 3)
+        return self.vector_store.similarity_search_with_score(query, k=k)
+
+    def get_status(self) -> dict:
+        try:
+            collection = self.vector_store._collection
+            chunk_count = collection.count()
+        except Exception:
+            chunk_count = -1
+
+        try:
+            categories = set()
+            result = collection.get(include=["metadatas"])
+            if result and result.get("metadatas"):
+                for meta in result["metadatas"]:
+                    cat = meta.get("category", "")
+                    if cat:
+                        categories.add(cat)
+        except Exception:
+            categories = set()
+
+        return {
+            "chunk_count": chunk_count,
+            "categories": sorted(categories),
+            "collection_name": chroma_conf.get("collection_name", ""),
+            "persist_directory": chroma_conf.get("persist_directory", ""),
+            "k": chroma_conf.get("k", 3),
+        }
+
+    # ── MD5 记录管理（文件路径 + MD5 组合键）──
+
+    def _md5_store_path(self) -> str:
+        return get_abs_path(chroma_conf["md5_hex_store"])
+
+    def _read_md5_records(self) -> dict[str, str]:
+        """读取 MD5 记录，返回 {文件路径: MD5} 字典。"""
+        records = {}
+        store = self._md5_store_path()
+        if not os.path.exists(store):
+            return records
+        with open(store, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                # 格式: file_path|md5  或  旧格式: md5
+                if "|" in line:
+                    parts = line.rsplit("|", 1)
+                    records[parts[0]] = parts[1]
+                else:
+                    # 兼容旧格式：只有 MD5，路径不可知
+                    records[f"__legacy__{line}"] = line
+        return records
+
+    def _write_md5_record(self, file_path: str, md5: str):
+        store = self._md5_store_path()
+        with open(store, "a", encoding="utf-8") as f:
+            f.write(f"{file_path}|{md5}\n")
+
+    def _remove_md5_record(self, file_path: str):
+        records = self._read_md5_records()
+        records.pop(file_path, None)
+        store = self._md5_store_path()
+        with open(store, "w", encoding="utf-8") as f:
+            for path, md5 in records.items():
+                if path.startswith("__legacy__"):
+                    f.write(f"{md5}\n")
+                else:
+                    f.write(f"{path}|{md5}\n")
+
+    # ── 文档增删改 ──
+
+    def delete_by_source(self, file_path: str):
+        """按来源文件路径删除向量库中对应的所有 chunk。"""
+        try:
+            collection = self.vector_store._collection
+            result = collection.get(where={"source": file_path})
+            ids = result.get("ids", [])
+            if ids:
+                collection.delete(ids=ids)
+                loggers.info(f"已删除 {len(ids)} 条向量，来源: {file_path}")
+            self._remove_md5_record(file_path)
+        except Exception as e:
+            loggers.error(f"删除文档失败:{file_path}, 错误:{e}")
+
+    def update_document(self, file_path: str, category: str):
+        """更新单个文档：先删旧的，再加新的。"""
+        self.delete_by_source(file_path)
+        self._load_single_file(file_path, category)
+
+    def _load_single_file(self, file_path: str, category: str):
+        """加载单个文件到向量库。"""
+        # 检查是否支持的文件类型
+        ext = os.path.splitext(file_path)[1]
+        if ext not in chroma_conf["allow_knowledge_file_type"]:
+            loggers.error(f"不支持的文件类型:{file_path}")
+            return
+
+        # 计算 MD5
+        md5_hex = get_file_md5_hex(file_path)
+        if not md5_hex:
+            return
+
+        # 检查是否已加载（同一路径同一 MD5 跳过）
+        records = self._read_md5_records()
+        if records.get(file_path) == md5_hex:
+            loggers.info(f"内容未变，跳过:{file_path}")
+            return
+
+        # 如果路径已存在但 MD5 不同 → 更新
+        if file_path in records:
+            loggers.info(f"检测到文件变化，更新:{file_path}")
+            self.delete_by_source(file_path)
+
+        # 加载文档
+        if file_path.endswith(".pdf"):
+            documents = pdf_loader(file_path)
+        elif file_path.endswith(".txt"):
+            documents = txt_loader(file_path)
+        else:
+            return
+
+        if not documents:
+            loggers.error(f"无内容:{file_path}")
+            return
+
+        # 注入元数据
+        for doc in documents:
+            doc.metadata["category"] = category
+            if "source" not in doc.metadata:
+                doc.metadata["source"] = file_path
+
+        # 按分类选择分块策略
+        spliter = _get_splitter(category)
+        texts = spliter.split_documents(documents)
+        if not texts:
+            loggers.error(f"分片后无内容:{file_path}")
+            return
+
+        # 写入向量库
+        self.vector_store.add_documents(texts)
+        self._write_md5_record(file_path, md5_hex)
+        loggers.info(f"内容已添加:{file_path} 分类:{category} chunks:{len(texts)}")
+
     def load_document(self):
-        # 加载知识文档到向量数据库的核心方法
-        # 支持 PDF 和 TXT 文件格式，自动去重（基于 MD5）
+        """扫描 data 目录，增量加载/更新所有文档。"""
         loggers.info("开始加载文档...")
-        def check_md5_hex(md5_for_check:str):
-            # 检查文件 MD5 是否已存在于记录文件中，用于避免重复加载相同内容
-            # Args:
-            #     md5_for_check (str): 待检查的文件 MD5 值
-            # Returns:
-            #     bool: 如果 MD5 已存在返回 True，否则返回 False
 
-            # 如果 MD5 记录文件不存在，创建空文件并返回 False（表示未存在）
-           if not os.path.exists(get_abs_path(chroma_conf["md5_hex_store"])):
-               open(get_abs_path(chroma_conf["md5_hex_store"]),"w",encoding="utf-8").close()
-               return False
-
-            # 遍历 MD5 记录文件，检查是否已有该 MD5
-           with open(get_abs_path(chroma_conf["md5_hex_store"]),"r",encoding="utf-8") as f:
-               for line in f.readlines():
-                   line=line.strip()
-                   if line==md5_for_check:
-                       return True
-           return False
-        def save_md5(md5_for_save:str):
-            # 将新的文件 MD5 保存到记录文件中
-            # Args:
-            #     md5_for_save (str): 要保存的文件 MD5 值
-            with open(get_abs_path(chroma_conf["md5_hex_store"]),"a",encoding="utf-8") as f:
-                f.write(md5_for_save+"\n")
-        def get_file_documents(file_path:str):
-            # 根据文件路径加载文档，自动识别文件类型
-            # Args:
-            #     file_path (str): 文件绝对路径
-            # Returns:
-            #     list[Document]: 加载后的文档列表
-            if file_path.endswith(".pdf"):
-                return pdf_loader(file_path)
-            elif file_path.endswith(".txt"):
-                return txt_loader(file_path)
-            else:
-                loggers.error(f"不支持的文件类型:{file_path}")
-                return []
-        # 获取知识库数据目录的绝对路径
         data_path = get_abs_path(chroma_conf["data_path"])
         loggers.info(f"数据目录：{data_path}")
         loggers.info(f"允许的文件类型：{chroma_conf['allow_knowledge_file_type']}")
 
-        # 获取目录下所有允许的文件类型（PDF 和 TXT）
-        allowed_files_path=listdir_with_allowed_type(
+        allowed_files = listdir_with_allowed_type(
             data_path,
             tuple(chroma_conf["allow_knowledge_file_type"])
         )
-        # 如果没有找到任何文件，记录错误并返回
-        if not allowed_files_path:
+        if not allowed_files:
             loggers.error(f"未找到任何文件，请检查目录：{data_path}")
             return
 
-        loggers.info(f"找到 {len(allowed_files_path)} 个文件待处理")
+        loggers.info(f"找到 {len(allowed_files)} 个文件待处理")
 
-        try:
-            # 遍历所有文件，逐个加载到向量数据库
-            for path in allowed_files_path:
-                # 步骤 1: 计算文件 MD5 值
-                md5_hex=get_file_md5_hex(path)
+        # 先清理已删除的文件
+        current_paths = {os.path.abspath(p) for p, _ in allowed_files}
+        records = self._read_md5_records()
+        for record_path in list(records.keys()):
+            if record_path.startswith("__legacy__"):
+                continue
+            if record_path not in current_paths:
+                loggers.info(f"文件已删除，清理向量:{record_path}")
+                self.delete_by_source(record_path)
 
-                # 步骤 2: 检查是否已加载（通过 MD5 去重）
-                if check_md5_hex(md5_hex):
-                    loggers.info(f"内容已存在:{path}")
-                    continue
+        # 加载/更新所有文件
+        for path, category in allowed_files:
+            abs_path = os.path.abspath(path)
+            try:
+                self._load_single_file(abs_path, category)
+            except Exception as e:
+                loggers.error(f"加载内容出错:{abs_path},错误信息:{e}")
 
-                # 步骤 3: 加载文档内容
-                documents:list[Document]=get_file_documents(path)
-                if not documents:
-                    loggers.error(f"无内容:{path}")
-                    continue
 
-                # 步骤 4: 文本分块（将长文档切分成合适的小段）
-                texts:list[Document]=self.spliter.split_documents(documents)
-                if not texts:
-                    loggers.error(f"分片后无内容:{path}")
-                    continue
-
-                # 步骤 5: 添加到向量数据库（自动计算向量嵌入）
-                self.vector_store.add_documents(texts)
-
-                # 步骤 6: 保存 MD5 记录，避免下次重复加载
-                save_md5(md5_hex)
-                loggers.info(f"内容已添加:{path}")
-        except Exception as e:
-             loggers.error(f"加载内容出错:{path},错误信息:{e}")
-
-if __name__=="__main__":
-    #VectorStoreService().load_document()
-    retriever=VectorStoreService().get_retriever()
-    result=retriever.invoke("WIFI")
+if __name__ == "__main__":
+    # VectorStoreService().load_document()
+    retriever = VectorStoreService().get_retriever()
+    result = retriever.invoke("WIFI")
     for r in result:
         print(r.page_content)
-        print("-"*20)
+        print("-" * 20)

@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m py_compile end/agent/tools/agent_tools.py end/agent/react_agent.py end/api.py)",
+      "Bash(python -m py_compile end/agent/tools/agent_tools.py)",
+      "Bash(python -m py_compile agent/tools/agent_tools.py)",
+      "Bash(python -m py_compile utils/config_handler.py model/factor.py config/../agent/tools/agent_tools.py)",
+      "Bash(python -m py_compile utils/config_handler.py)",
+      "Bash(python -m py_compile model/factor.py)",
+      "Bash(python -m py_compile config_handler.py)",
+      "Bash(python -m py_compile end/utils/config_handler.py end/model/factor.py)",
+      "Bash(python -m py_compile agent/tools/agent_tools.py agent/react_agent.py)",
+      "Bash(python -c \"from agent.tools.agent_tools import get_current_date; print\\(get_current_date.invoke\\({}\\)\\)\")",
+      "Bash(python -m py_compile end/agent/tools/agent_tools.py end/agent/react_agent.py)",
+      "Bash(python -m py_compile end/utils/file_handler.py end/rag/vector_store.py)",
+      "Bash(cd /c/Users/鄭昊/Desktop/Agent/end && find data -type f 2>/dev/null | sort && echo \"---\" && du -sh rag/chroma_db 2>/dev/null && echo \"---\" && ls rag/chroma_db/ 2>/dev/null)",
+      "Read(//c/c/Users/鄭昊/Desktop/Agent/end/**)",
+      "Bash(python -c \"from rag.vector_store import VectorStoreService; VectorStoreService\\(\\).load_document\\(\\)\")",
+      "Bash(pip install *)",
+      "Bash(rm -f md5.text)",
+      "Bash(rm -rf rag/chroma_db/*)"
+    ]
+  }
+}

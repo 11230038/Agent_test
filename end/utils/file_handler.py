@@ -24,17 +24,21 @@ def get_file_md5_hex(file_path:str):
         loggers.error(f"获取文件md5出错:{file_path},错误信息:{e}")
         return None
 
-#返回文件夹内的文件列表
-def listdir_with_allowed_type(path:str,allowed_types:tuple):
-    files=[]
+#递归扫描文件夹，返回文件路径列表（每项包含路径和分类）
+def listdir_with_allowed_type(path:str,allowed_types:tuple,default_category:str="扫地机器人客服"):
+    results = []
     if not os.path.isdir(path):
-        loggers.error(f"文件不存在:{path}")
-        return None
-    for file in os.listdir(path):
-        file_path=os.path.join(path,file)
-        if os.path.isfile(file_path) and os.path.splitext(file_path)[1] in allowed_types:
-            files.append(file_path)
-    return tuple(files)
+        loggers.error(f"目录不存在:{path}")
+        return tuple(results)
+    for root, dirs, files in os.walk(path):
+        for file in files:
+            if os.path.splitext(file)[1] in allowed_types:
+                file_path = os.path.join(root, file)
+                # 根据子目录确定分类
+                rel_dir = os.path.relpath(root, path)
+                category = rel_dir if rel_dir != "." else default_category
+                results.append((file_path, category))
+    return tuple(results)
 
 #读取pdf文件
 def pdf_loader(file_path:str,passwd=None)->list[Document]:
