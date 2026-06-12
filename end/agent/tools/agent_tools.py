@@ -2,6 +2,7 @@ from langchain_core.tools import tool
 from rag.rag_service import get_rag_service
 from utils.config_handler import agent_conf
 from utils.path_tool import get_abs_path
+from utils import session_store
 import os
 import json
 import urllib.request
@@ -111,6 +112,22 @@ def get_user_id() -> str:
     return "未知用户"
 
 
+@tool(description="获取当前用户的完整画像，包括城市、性别、年龄、偏好等")
+def get_user_profile() -> str:
+    user_id = _user_context.get("user_id", "")
+    if not user_id or user_id == "未知用户":
+        return "暂无用户画像：用户ID未知"
+    profile = session_store.get_profile(user_id)
+    if not profile:
+        return "暂无用户画像"
+    return json.dumps({
+        "city": profile.get("city", ""),
+        "gender": profile.get("gender", ""),
+        "age": profile.get("age", 0),
+        "preferences": profile.get("preferences", {}),
+    }, ensure_ascii=False)
+
+
 @tool(description="获取当前日期")
 def get_current_date() -> str:
     month = _user_context.get("month")
@@ -151,6 +168,20 @@ def fetch_external_data(user_id: str, month: str) -> str:
     except KeyError:
         loggers.error(f"用户使用记录不存在:{user_id}")
         return ""
+
+
+@tool(description="记住用户说的偏好、需求或备注，key 是分类标签，value 是具体内容")
+def save_user_note(key: str, value: str) -> str:
+    user_id = _user_context.get("user_id", "")
+    if not user_id or user_id == "未知用户":
+        return "无法保存：用户ID未知，请先确认用户身份"
+    try:
+        session_store.merge_profile(user_id, new_prefs={key: value})
+        loggers.info(f"用户备注已保存: user={user_id} {key}={value}")
+        return f"已记住：{key} → {value}"
+    except Exception as e:
+        loggers.error(f"保存用户备注失败:{e}")
+        return f"保存失败：{e}"
 
 
 @tool(description="为提示词切换提供上下文")

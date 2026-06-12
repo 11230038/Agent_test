@@ -4,11 +4,24 @@ import { computed, nextTick, ref, watch } from 'vue'
 const SESSION_ID = 'sess_' + Math.random().toString(36).slice(2, 10)
 const MODE_CHAT = 'chat'
 const MODE_SEARCH = 'search'
+const MODE_CHAT_ONLY = 'chat_only'
+const MODES = [MODE_CHAT_ONLY, MODE_CHAT, MODE_SEARCH]
+const MODE_LABELS = { chat_only: '仅聊天', chat: '智能问答', search: '知识库检索' }
+const MODE_GREETINGS = {
+  chat_only: '嗨～我是小扫，你的扫地机器人聊天伙伴！我们可以随便聊聊，有什么想说的吗？😊',
+  chat: '你好，我是扫地机器人智能客服。你可以直接问我产品功能、使用问题或清洁建议。',
+  search: '输入关键词搜索知识库，例如"滤网更换"、"WIFI设置"，我会返回匹配的参考资料。',
+}
+const MODE_TITLES = {
+  chat_only: '小扫 · 聊聊天',
+  chat: '扫地机器人智能客服',
+  search: '知识库检索',
+}
 
 const messages = ref([
   {
     role: 'assistant',
-    content: '你好，我是扫地机器人智能客服。你可以直接问我产品功能、使用问题或清洁建议。',
+    content: MODE_GREETINGS[MODE_CHAT],
   },
 ])
 const inputValue = ref('')
@@ -26,11 +39,11 @@ const DEFAULT_USER_CONTEXT = {
   month: new Date().toISOString().slice(0, 7),
 }
 
-const placeholderText = computed(() =>
-  mode.value === MODE_SEARCH
-    ? '输入关键词搜索知识库，例如：滤网更换、WIFI设置'
-    : '请输入你的问题，例如：如何设置扫地机器人定时清扫？'
-)
+const placeholderText = computed(() => {
+  if (mode.value === MODE_SEARCH) return '输入关键词搜索知识库，例如：滤网更换、WIFI设置'
+  if (mode.value === MODE_CHAT_ONLY) return '随意聊聊吧，例如：今天过得怎么样？'
+  return '请输入你的问题，例如：如何设置扫地机器人定时清扫？'
+})
 
 const scrollToBottom = async () => {
   await nextTick()
@@ -38,9 +51,10 @@ const scrollToBottom = async () => {
   chatBodyRef.value.scrollTop = chatBodyRef.value.scrollHeight
 }
 
-const toggleMode = () => {
-  mode.value = mode.value === MODE_CHAT ? MODE_SEARCH : MODE_CHAT
+const switchMode = (newMode) => {
+  mode.value = newMode
   searchResults.value = []
+  messages.value = [{ role: 'assistant', content: MODE_GREETINGS[newMode] }]
   errorMessage.value = ''
 }
 
@@ -100,7 +114,7 @@ const sendMessage = async () => {
     const response = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message, history, session_id: SESSION_ID, user_context: DEFAULT_USER_CONTEXT }),
+      body: JSON.stringify({ message, history, session_id: SESSION_ID, user_context: DEFAULT_USER_CONTEXT, mode: mode.value }),
     })
 
     const data = await response.json()
@@ -139,16 +153,16 @@ watch(
     <section class="chat-card">
       <header class="chat-header">
         <div class="chat-heading">
-          <p class="chat-kicker">{{ mode === MODE_CHAT ? '智能问答' : '知识库检索' }}</p>
-          <h1>扫地机器人智能客服</h1>
+          <p class="chat-kicker">{{ MODE_LABELS[mode] }}</p>
+          <h1>{{ MODE_TITLES[mode] }}</h1>
           <p class="chat-subtitle">
-            {{ mode === MODE_CHAT ? '支持多轮对话与上下文理解，回答逐字流式输出。' : '直接搜索知识库，查看匹配的参考资料及相似度。' }}
+            {{ mode === MODE_CHAT_ONLY ? '纯聊天模式，不使用工具和知识库，陪你轻松对话。' : mode === MODE_CHAT ? '智能问答模式，支持多轮对话、知识库检索与上下文理解。' : '知识库检索模式，直接查看匹配的参考资料及相关性分值。' }}
           </p>
         </div>
         <div class="header-right">
-          <button class="mode-toggle" :class="{ 'mode-toggle--search': mode === MODE_SEARCH }" @click="toggleMode">
-            {{ mode === MODE_CHAT ? '🔍 检索模式' : '💬 对话模式' }}
-          </button>
+          <select class="mode-select" :value="mode" @change="e => switchMode(e.target.value)">
+            <option v-for="m in MODES" :key="m" :value="m">{{ m === MODE_CHAT_ONLY ? '💬 仅聊天' : m === MODE_CHAT ? '🤖 智能问答' : '🔍 知识库检索' }}</option>
+          </select>
           <div class="chat-status" :class="{ 'chat-status--loading': loading }">
             {{ loading ? '正在查询...' : '可以开始提问' }}
           </div>
@@ -156,8 +170,8 @@ watch(
       </header>
 
       <main ref="chatBodyRef" class="chat-body">
-        <!-- 对话模式消息 -->
-        <div v-if="mode === MODE_CHAT">
+        <!-- 对话消息（聊天 / 仅聊天 / 智能问答） -->
+        <div v-if="mode !== MODE_SEARCH">
           <div
             v-for="(message, index) in messages"
             :key="`msg-${index}`"
@@ -177,7 +191,7 @@ watch(
           <div v-for="(r, idx) in searchResults" :key="`sr-${idx}`" class="result-card">
             <div class="result-header">
               <span class="result-index">#{{ idx + 1 }}</span>
-              <span class="result-score">相似度 {{ (r.score * 100).toFixed(1) }}%</span>
+              <span class="result-score">相关性 {{ r.score.toFixed(3) }}</span>
               <span class="result-category">{{ r.category }}</span>
             </div>
             <p class="result-content">{{ r.content }}</p>
@@ -284,29 +298,17 @@ watch(
   flex-shrink: 0;
 }
 
-.mode-toggle {
-  padding: 6px 16px;
-  border: 1.5px solid #2563eb;
-  border-radius: 999px;
-  background: transparent;
-  color: #2563eb;
+.mode-select {
+  padding: 8px 14px;
+  border: 1.5px solid rgba(148, 163, 184, 0.4);
+  border-radius: 12px;
+  background: #fff;
+  color: #0f172a;
   font-size: 0.82rem;
   font-weight: 600;
   cursor: pointer;
-  transition: all 0.2s;
-}
-
-.mode-toggle:hover {
-  background: #eff6ff;
-}
-
-.mode-toggle--search {
-  background: #2563eb;
-  color: #fff;
-}
-
-.mode-toggle--search:hover {
-  background: #1d4ed8;
+  outline: none;
+  appearance: auto;
 }
 
 .chat-status {

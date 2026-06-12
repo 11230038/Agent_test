@@ -38,7 +38,21 @@ def load_report_prompts():
         loggers.error(f"报告提示出错:{e}")
         return None
 
+def load_chat_prompts():
+    try:
+        chat_prompt_path = get_abs_path(prompts_conf["chat_prompt_path"])
+    except KeyError as e:
+        loggers.error(f"聊天提示出错:{e}")
+        return None
+    try:
+        return open(chat_prompt_path, "r", encoding="utf-8").read()
+    except Exception as e:
+        loggers.error(f"聊天提示出错:{e}")
+        return None
+
+
 if __name__=="__main__":
     print(load_system_prompts())
     print(load_rag_prompts())
     print(load_report_prompts())
+    print(load_chat_prompts())
