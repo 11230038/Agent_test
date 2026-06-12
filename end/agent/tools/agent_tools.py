@@ -12,6 +12,11 @@ from utils.logger_handler import loggers
 
 external_data = {}
 _user_context: dict = {}
+_last_rag_sources: list[dict] = []
+
+
+def get_last_rag_sources() -> list[dict]:
+    return _last_rag_sources
 
 
 def set_user_context(ctx: dict | None):
@@ -26,10 +31,14 @@ def clear_user_context():
 
 @tool(description="从向量存储中检索参考资料")
 def rag_summarize(query: str) -> str:
+    global _last_rag_sources
     try:
-        return get_rag_service().rag_summarize(query)
+        result = get_rag_service().rag_summarize(query)
+        _last_rag_sources = result.get("sources", [])
+        return result.get("answer", "未检索到相关参考资料。")
     except Exception as e:
         loggers.error(f"RAG调用失败,错误信息:{e}")
+        _last_rag_sources = []
         return "知识库暂不可用，请稍后重试。"
 
 

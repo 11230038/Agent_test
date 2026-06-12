@@ -5,6 +5,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from agent.react_agent import ReactAgent, AgentInitializationError, AgentExecutionError
+from agent.tools.agent_tools import get_last_rag_sources
 from rag.rag_service import get_rag_service
 from utils.logger_handler import loggers
 
@@ -99,8 +100,9 @@ def chat(payload: ChatRequest):
         loggers.error(f"[{trace_id}] 聊天服务执行失败:{e}")
         raise HTTPException(status_code=500, detail=f"聊天服务执行失败:{e}") from e
 
-    loggers.info(f"[{trace_id}] 聊天请求完成 answer_len={len(answer)}")
-    return success_response("请求成功", {"answer": answer, "trace_id": trace_id})
+    sources = get_last_rag_sources()
+    loggers.info(f"[{trace_id}] 聊天请求完成 answer_len={len(answer)} sources={len(sources)}")
+    return success_response("请求成功", {"answer": answer, "trace_id": trace_id, "sources": sources})
 
 
 @app.post("/api/chat/stream")

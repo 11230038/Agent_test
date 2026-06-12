@@ -94,7 +94,7 @@ const sendMessage = async () => {
   errorMessage.value = ''
   loading.value = true
 
-  const history = messages.value.slice(0, -1).map((m) => ({ role: m.role, content: m.content }))
+  const history = messages.value.slice(-16, -1).map((m) => ({ role: m.role, content: m.content }))
 
   try {
     const response = await fetch('/api/chat', {
