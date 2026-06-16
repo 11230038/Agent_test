@@ -65,6 +65,71 @@ class VectorStoreService:
             "k": chroma_conf.get("k", 3),
         }
 
+    def get_detailed_structure(self) -> dict:
+        """获取知识库详细内容结构：按分类 -> 按来源文件 -> chunk 列表。"""
+        try:
+            collection = self.vector_store._collection
+            result = collection.get(include=["metadatas", "documents"])
+        except Exception as e:
+            return {"error": str(e), "chunk_count": -1, "categories": []}
+
+        chunk_count = len(result.get("ids", [])) if result else 0
+        metadatas = result.get("metadatas") or []
+        documents = result.get("documents") or []
+        ids = result.get("ids") or []
+
+        # 按分类 → 来源文件 组织
+        from collections import defaultdict
+        category_map: dict[str, dict[str, list[dict]]] = defaultdict(lambda: defaultdict(list))
+
+        for i, chunk_id in enumerate(ids):
+            meta = metadatas[i] if i < len(metadatas) else {}
+            doc_text = documents[i] if i < len(documents) else ""
+            category = meta.get("category", "未分类")
+            source = meta.get("source", "未知来源")
+            # 取简短文件名
+            short_source = source.split("\\")[-1].split("/")[-1] if source else "未知"
+            category_map[category][short_source].append({
+                "chunk_id": chunk_id,
+                "content_preview": doc_text[:120] + ("..." if len(doc_text) > 120 else ""),
+                "char_count": len(doc_text),
+                "metadata": {k: v for k, v in meta.items() if k not in ("source", "category")},
+            })
+
+        # 构建结构化输出
+        categories_detail = []
+        for cat_name in sorted(category_map.keys()):
+            cat_entry = {
+                "name": cat_name,
+                "file_count": len(category_map[cat_name]),
+                "total_chunks": sum(len(chunks) for chunks in category_map[cat_name].values()),
+                "files": [],
+            }
+            for file_name in sorted(category_map[cat_name].keys()):
+                chunks = category_map[cat_name][file_name]
+                # 取第一个 chunk 的 source 作为完整路径
+                full_source = chunks[0]["metadata"].get("source", "")
+                cat_entry["files"].append({
+                    "name": file_name,
+                    "source": full_source,
+                    "chunk_count": len(chunks),
+                    "total_chars": sum(c["char_count"] for c in chunks),
+                    "chunks": sorted(chunks, key=lambda c: c["chunk_id"]),
+                })
+            categories_detail.append(cat_entry)
+
+        # MD5 记录
+        md5_records = self._read_md5_records()
+        tracked_files = [k for k in md5_records.keys() if not k.startswith("__legacy__")]
+
+        return {
+            "chunk_count": chunk_count,
+            "category_count": len(categories_detail),
+            "tracked_file_count": len(tracked_files),
+            "collection_name": chroma_conf.get("collection_name", ""),
+            "categories": categories_detail,
+        }
+
     # ── MD5 记录管理（文件路径 + MD5 组合键）──
 
     def _md5_store_path(self) -> str:
@@ -120,6 +185,23 @@ class VectorStoreService:
             self._remove_md5_record(file_path)
         except Exception as e:
             loggers.error(f"删除文档失败:{file_path}, 错误:{e}")
+
+    def update_chunk(self, chunk_id: str, new_content: str) -> bool:
+        """更新单个 chunk 的内容，Chroma 会自动重新嵌入。"""
+        try:
+            collection = self.vector_store._collection
+            # 验证 chunk 存在
+            result = collection.get(ids=[chunk_id], include=["metadatas"])
+            if not result or not result.get("ids"):
+                loggers.error(f"chunk 不存在: {chunk_id}")
+                return False
+            # 更新文档内容，Chroma 会重新计算 embedding
+            collection.update(ids=[chunk_id], documents=[new_content])
+            loggers.info(f"chunk 已更新: {chunk_id} 内容长度: {len(new_content)}")
+            return True
+        except Exception as e:
+            loggers.error(f"更新 chunk 失败: {chunk_id}, 错误: {e}")
+            return False
 
     def update_document(self, file_path: str, category: str):
         """更新单个文档：先删旧的，再加新的。"""

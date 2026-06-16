@@ -1,5 +1,6 @@
+import os
 import uuid
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Form
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
@@ -203,9 +204,10 @@ def chat_stream(req: ChatRequest):
                 if msg_type == "error":
                     yield f"data: [ERROR] {data}\n\n"
                     break
-                sse = f"data: {data}\n\n"
+                for line in data.split("\n"):
+                    yield f"data: {line}\n"
+                yield "\n"
                 loggers.info(f"[{trace_id}] SSE → {repr(data[:80])}")
-                yield sse
             except queue.Empty:
                 yield "data: \n\n"
 
@@ -250,6 +252,200 @@ def rag_search(payload: SearchRequest):
         "total": len(results),
         "results": results,
     })
+
+
+# ── 管理端接口 ──
+
+ADMIN_PASSWORD = "796581"
+
+_data_path: str | None = None
+
+
+def _get_data_dir() -> str:
+    """获取知识库 data 目录的绝对路径。"""
+    global _data_path
+    if _data_path is None:
+        from utils.config_handler import chroma_conf
+        from utils.path_tool import get_abs_path
+        _data_path = get_abs_path(chroma_conf.get("data_path", "data"))
+    return _data_path
+
+
+def _check_admin(password: str):
+    if password != ADMIN_PASSWORD:
+        raise HTTPException(status_code=403, detail="密码错误，无权访问")
+
+
+def _allowed_ext(filename: str) -> bool:
+    from utils.config_handler import chroma_conf
+    ext = os.path.splitext(filename)[1].lower()
+    return ext in chroma_conf.get("allow_knowledge_file_type", [".pdf", ".txt"])
+
+
+class AdminAuthRequest(BaseModel):
+    password: str
+
+
+@app.post("/api/admin/knowledge", response_model=ApiResponse)
+def admin_knowledge(payload: AdminAuthRequest):
+    _check_admin(payload.password)
+    try:
+        rag = get_rag_service()
+        structure = rag.vector_store.get_detailed_structure()
+    except Exception as e:
+        loggers.error(f"获取知识库结构失败: {e}")
+        raise HTTPException(status_code=503, detail="知识库服务暂不可用") from e
+    return success_response("ok", structure)
+
+
+@app.post("/api/admin/upload")
+async def admin_upload(
+    password: str = Form(...),
+    category: str = Form(default="扫地机器人客服"),
+    file: UploadFile = File(...),
+):
+    _check_admin(password)
+
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="未选择文件")
+    if not _allowed_ext(file.filename):
+        raise HTTPException(status_code=400, detail=f"不支持的文件类型，仅支持 PDF、TXT")
+
+    data_dir = _get_data_dir()
+    # 按分类存储到子目录
+    cat_dir = os.path.join(data_dir, category) if category != "扫地机器人客服" else data_dir
+    os.makedirs(cat_dir, exist_ok=True)
+
+    save_path = os.path.join(cat_dir, file.filename)
+    # 避免覆盖：同名文件加序号
+    base, ext = os.path.splitext(file.filename)
+    counter = 1
+    while os.path.exists(save_path):
+        save_path = os.path.join(cat_dir, f"{base}_{counter}{ext}")
+        counter += 1
+
+    try:
+        content = await file.read()
+        with open(save_path, "wb") as f:
+            f.write(content)
+    except Exception as e:
+        loggers.error(f"保存文件失败: {e}")
+        raise HTTPException(status_code=500, detail="文件保存失败") from e
+
+    # 索引到向量库
+    try:
+        rag = get_rag_service()
+        abs_path = os.path.abspath(save_path)
+        rag.vector_store._load_single_file(abs_path, category)
+    except Exception as e:
+        loggers.error(f"索引文件失败: {e}")
+        raise HTTPException(status_code=500, detail="文件已保存但索引失败") from e
+
+    loggers.info(f"管理端上传文件成功: {save_path} 分类: {category}")
+    return success_response("上传成功", {
+        "filename": os.path.basename(save_path),
+        "category": category,
+        "path": os.path.abspath(save_path),
+    })
+
+
+class AdminDeleteRequest(BaseModel):
+    password: str
+    source: str  # 文件完整路径
+
+
+@app.post("/api/admin/delete", response_model=ApiResponse)
+def admin_delete(payload: AdminDeleteRequest):
+    _check_admin(payload.password)
+
+    source = payload.source.strip()
+    if not source or not os.path.exists(source):
+        raise HTTPException(status_code=400, detail="文件不存在")
+
+    filename = os.path.basename(source)
+
+    # 从向量库删除
+    try:
+        rag = get_rag_service()
+        rag.vector_store.delete_by_source(source)
+    except Exception as e:
+        loggers.error(f"删除向量失败: {e}")
+        raise HTTPException(status_code=500, detail="向量删除失败") from e
+
+    # 从磁盘删除
+    try:
+        os.remove(source)
+    except Exception as e:
+        loggers.error(f"删除文件失败: {e}")
+        # 向量已删，文件删不掉的情况也要报
+        raise HTTPException(status_code=500, detail="向量已删除，但文件删除失败") from e
+
+    loggers.info(f"管理端删除文档成功: {source}")
+    return success_response("删除成功", {"filename": filename, "source": source})
+
+
+class AdminCategoryRequest(BaseModel):
+    password: str
+    source: str
+    category: str
+
+
+@app.post("/api/admin/category", response_model=ApiResponse)
+def admin_change_category(payload: AdminCategoryRequest):
+    _check_admin(payload.password)
+
+    source = payload.source.strip()
+    new_category = payload.category.strip()
+    if not source or not os.path.exists(source):
+        raise HTTPException(status_code=400, detail="源文件不存在")
+    if not new_category:
+        raise HTTPException(status_code=400, detail="分类不能为空")
+
+    try:
+        rag = get_rag_service()
+        abs_path = os.path.abspath(source)
+        rag.vector_store.delete_by_source(abs_path)
+        rag.vector_store._load_single_file(abs_path, new_category)
+    except Exception as e:
+        loggers.error(f"更改分类失败: {e}")
+        raise HTTPException(status_code=500, detail="分类更改失败") from e
+
+    loggers.info(f"管理端更改分类成功: {source} → {new_category}")
+    return success_response("分类已更新", {
+        "filename": os.path.basename(source),
+        "category": new_category,
+    })
+
+
+class AdminChunkUpdateRequest(BaseModel):
+    password: str
+    chunk_id: str
+    content: str
+
+
+@app.post("/api/admin/chunk/update", response_model=ApiResponse)
+def admin_chunk_update(payload: AdminChunkUpdateRequest):
+    _check_admin(payload.password)
+
+    chunk_id = payload.chunk_id.strip()
+    content = payload.content.strip()
+    if not chunk_id:
+        raise HTTPException(status_code=400, detail="chunk_id 不能为空")
+    if not content:
+        raise HTTPException(status_code=400, detail="内容不能为空")
+
+    try:
+        rag = get_rag_service()
+        ok = rag.vector_store.update_chunk(chunk_id, content)
+    except Exception as e:
+        loggers.error(f"更新 chunk 失败: {e}")
+        raise HTTPException(status_code=500, detail="更新失败") from e
+
+    if not ok:
+        raise HTTPException(status_code=404, detail="chunk 不存在")
+
+    loggers.info(f"管理端更新 chunk 成功: {chunk_id}")
+    return success_response("chunk 已更新", {"chunk_id": chunk_id, "char_count": len(content)})
 
 
 # ── 会话 & 画像接口 ──
