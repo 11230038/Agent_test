@@ -1,0 +1,4 @@
+# API Key & Model Configuration
+dashscope_api_key: "your_api_key"
+chat_model_name: your_chat_model
+embedding_model_name: your_embedding_model

@@ -1,17 +1,3 @@
-*.rar
-
-*.text
-
-*.txt 
-
 *.log
-
-*.pdf
-
-*.csv
-
-*.pyc
-
-*.bin
 
 api.yml
