@@ -184,9 +184,43 @@ class RagSummarizeService:
         self.model = get_chat_model()
         self.chain = self._init_chain()
         self.retrieval_cache = RetrievalCache(max_size=100, ttl_seconds=300)
+        self._rewrite_cache: dict[str, list[str]] = {}
+        self._verbosity_notice = False
 
     def _init_chain(self):
         return self.prompt_template | self.model | StrOutputParser()
+
+    # ── 0. 查询改写 ──
+
+    QUERY_REWRITE_PROMPT = (
+        "将以下用户问题改写为2-3个简洁的检索关键词短语，用半角竖线|分隔，"
+        "每个短语5-15字，直接输出关键词不要解释：\n{query}"
+    )
+
+    QUERY_REWRITE_CACHE_SIZE = 200
+
+    def _rewrite_query(self, query: str) -> list[str]:
+        """将用户问题改写为多个检索关键词，带缓存。"""
+        key = query.strip()
+        if key in self._rewrite_cache:
+            return self._rewrite_cache[key]
+        try:
+            prompt = self.QUERY_REWRITE_PROMPT.format(query=query)
+            raw = self.model.invoke(prompt).content.strip()
+            # 清理 LLM 输出中可能的杂讯
+            phrases = [p.strip() for p in raw.replace("\n", "|").split("|") if p.strip()]
+            # 过滤过短或过长的词
+            phrases = [p for p in phrases if 2 <= len(p) <= 40]
+            if not phrases:
+                return [query]
+            # 限制缓存大小
+            if len(self._rewrite_cache) >= self.QUERY_REWRITE_CACHE_SIZE:
+                self._rewrite_cache.pop(next(iter(self._rewrite_cache)))
+            self._rewrite_cache[key] = phrases
+            loggers.info(f"查询改写: '{query[:40]}' → {phrases}")
+            return phrases
+        except Exception:
+            return [query]
 
     # ── 1. 检索（独立复用）──
 
@@ -260,7 +294,22 @@ class RagSummarizeService:
         return docs
 
     def rag_summarize(self, query: str, style: str = "sources") -> dict:
-        results = self.search(query)
+        # 查询改写：将用户问题扩展为多个关键词，分别检索后合并去重
+        queries = self._rewrite_query(query)
+        if len(queries) == 1:
+            results = self.search(queries[0])
+        else:
+            seen = set()
+            results = []
+            for q in queries:
+                for r in self.search(q):
+                    # 按内容摘要去重
+                    key = r["content"][:80]
+                    if key not in seen:
+                        seen.add(key)
+                        results.append(r)
+            results.sort(key=lambda r: r["score"], reverse=True)
+
         if not results:
             return {"answer": "未检索到相关参考资料。", "sources": []}
         context = self.format_context(results, style=style)

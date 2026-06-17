@@ -58,6 +58,7 @@ const messages = ref([
 ])
 const inputValue = ref('')
 const loading = ref(false)
+const abortController = ref(null)
 const errorMessage = ref('')
 const chatBodyRef = ref(null)
 const mode = ref(MODE_CHAT)
@@ -139,6 +140,7 @@ const sendMessage = async () => {
   inputValue.value = ''
   errorMessage.value = ''
   loading.value = true
+  abortController.value = new AbortController()
 
   const history = messages.value.slice(-16, -1).map((m) => ({ role: m.role, content: m.content }))
 
@@ -147,6 +149,7 @@ const sendMessage = async () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message, history, session_id: SESSION_ID, user_context: DEFAULT_USER_CONTEXT, mode: mode.value }),
+      signal: abortController.value.signal,
     })
 
     if (!response.ok) {
@@ -193,9 +196,23 @@ const sendMessage = async () => {
     }
     messages.value[idx].content = content.trim()
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : '请求失败，请稍后重试。'
+    if (error.name === 'AbortError') {
+      // 用户主动停止，不显示错误
+      if (!messages.value[idx].content.trim()) {
+        messages.value[idx].content = '（已停止生成）'
+      }
+    } else {
+      errorMessage.value = error instanceof Error ? error.message : '请求失败，请稍后重试。'
+    }
   } finally {
     loading.value = false
+    abortController.value = null
+  }
+}
+
+const stopGeneration = () => {
+  if (abortController.value) {
+    abortController.value.abort()
   }
 }
 
@@ -294,6 +311,14 @@ watch(
           @keydown="handleKeydown"
         />
         <button
+          v-if="loading && mode !== MODE_SEARCH"
+          class="send-button send-button--stop"
+          @click="stopGeneration"
+        >
+          ⏹ 停止生成
+        </button>
+        <button
+          v-else
           class="send-button"
           :class="{ 'send-button--search': mode === MODE_SEARCH }"
           :disabled="!canSend"
@@ -585,6 +610,17 @@ watch(
 .send-button--search {
   background: linear-gradient(135deg, #059669 0%, #047857 100%);
   box-shadow: 0 14px 28px rgba(5, 150, 105, 0.24);
+}
+
+.send-button--stop {
+  background: linear-gradient(135deg, #dc2626 0%, #991b1b 100%);
+  box-shadow: 0 14px 28px rgba(220, 38, 38, 0.3);
+  animation: pulse-stop 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse-stop {
+  0%, 100% { box-shadow: 0 14px 28px rgba(220, 38, 38, 0.3); }
+  50% { box-shadow: 0 14px 36px rgba(220, 38, 38, 0.5); }
 }
 
 @media (max-width: 768px) {

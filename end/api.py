@@ -1,7 +1,8 @@
 import os
-import secrets
 import time
 import uuid
+
+import jwt
 from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Form
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -151,14 +152,27 @@ def chat(payload: ChatRequest):
         session_store.save_message(sid, "user", message)
         session_store.save_message(sid, "assistant", answer)
 
-        # 自动画像：从 user_context 拿基础信息，从对话提取偏好和人口统计
+        # 自动画像：LLM 提取 + 关键词规则兜底
         uctx = payload.user_context or {}
         uid = uctx.get("user_id", "")
         if uid and uid != "未知用户":
             city = uctx.get("city", "")
-            demos = session_store.extract_demographics(message + " " + answer)
-            prefs = session_store.extract_preferences(message + " " + answer)
-            session_store.merge_profile(uid, city, demos.get("gender", ""), demos.get("age", 0), prefs)
+            dialogue = message + " " + answer
+            # 优先 LLM 提取
+            profile = session_store.extract_profile_with_llm(dialogue)
+            if profile:
+                prefs = profile.get("preferences", {}) or {}
+                session_store.merge_profile(
+                    uid, city,
+                    profile.get("gender", ""),
+                    profile.get("age", 0),
+                    prefs,
+                )
+            else:
+                # LLM 失败时回退到关键词规则
+                demos = session_store.extract_demographics(dialogue)
+                prefs = session_store.extract_preferences(dialogue)
+                session_store.merge_profile(uid, city, demos.get("gender", ""), demos.get("age", 0), prefs)
     except Exception:
         pass  # 持久化失败不影响主流程
 
@@ -259,18 +273,10 @@ def rag_search(payload: SearchRequest):
 # ── 管理端接口 ──
 
 ADMIN_PASSWORD = "796581"
-TOKEN_EXPIRE_SECONDS = 86400  # 24 小时
+JWT_SECRET = "robot-agent-admin-secret-key-2026"
+JWT_EXPIRE_SECONDS = 86400  # 24 小时
 
-_sessions: dict[str, float] = {}  # token → 过期时间戳
 _data_path: str | None = None
-
-
-def _cleanup_sessions():
-    """清理过期 token。"""
-    now = time.time()
-    expired = [t for t, exp in _sessions.items() if exp < now]
-    for t in expired:
-        del _sessions[t]
 
 
 def _get_data_dir() -> str:
@@ -284,9 +290,12 @@ def _get_data_dir() -> str:
 
 
 def _check_token(token: str):
-    _cleanup_sessions()
-    if token not in _sessions:
-        raise HTTPException(status_code=403, detail="令牌无效或已过期，请重新登录")
+    try:
+        jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=403, detail="令牌已过期，请重新登录")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=403, detail="令牌无效，请重新登录")
 
 
 def _allowed_ext(filename: str) -> bool:
@@ -305,10 +314,12 @@ class AdminLoginRequest(BaseModel):
 def admin_login(payload: AdminLoginRequest):
     if payload.password != ADMIN_PASSWORD:
         raise HTTPException(status_code=403, detail="密码错误")
-    _cleanup_sessions()
-    token = secrets.token_hex(32)
-    _sessions[token] = time.time() + TOKEN_EXPIRE_SECONDS
-    loggers.info(f"管理端登录成功，当前活跃会话: {len(_sessions)}")
+    token = jwt.encode(
+        {"exp": time.time() + JWT_EXPIRE_SECONDS},
+        JWT_SECRET,
+        algorithm="HS256",
+    )
+    loggers.info("管理端登录成功")
     return success_response("登录成功", {"token": token})
 
 

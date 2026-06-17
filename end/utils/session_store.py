@@ -248,6 +248,35 @@ def get_profile(user_id: str) -> dict | None:
     }
 
 
+# ── LLM 画像提取 ──
+
+EXTRACT_PROFILE_PROMPT = """从以下客服对话中提取用户信息，严格输出JSON，不要加任何解释文字：
+---
+{dialogue}
+---
+JSON格式：{{"gender":"男/女/未知","age":数字或0,"preferences":{{"house_type":"大户型/小户型","has_pets":true/false,"robot_type":"扫拖一体/扫地机器人","care_noise":true/false,"has_children":true/false,"has_elderly":true/false,"need_auto_dust":true/false,"need_self_clean":true/false}}}}
+只输出JSON："""
+
+
+def extract_profile_with_llm(dialogue: str) -> dict | None:
+    """用 LLM 从对话中提取用户画像，失败返回 None。"""
+    try:
+        from model.factor import get_chat_model
+        model = get_chat_model()
+        result = model.invoke(EXTRACT_PROFILE_PROMPT.format(dialogue=dialogue[:2000])).content
+        # 清理 LLM 输出：去掉 markdown 代码块包裹
+        text = result.strip()
+        if text.startswith("```"):
+            text = text.split("\n", 1)[-1]
+            if text.endswith("```"):
+                text = text[:-3]
+            text = text.strip()
+        profile = json.loads(text)
+        return profile
+    except Exception:
+        return None
+
+
 # 模块导入时自动初始化
 _init()
 _init_feedback()
