@@ -8,27 +8,42 @@ const authed = ref(false)
 const structure = ref(null)
 
 // ── 密码验证 ──
-const storedPwd = ref('')
+const adminToken = ref('')
 const unlock = async () => {
   const pwd = password.value.trim()
   if (!pwd || loading.value) return
   loading.value = true
   error.value = ''
   try {
-    const resp = await fetch('/api/admin/knowledge', {
+    // 1. 登录获取 token
+    const loginResp = await fetch('/api/admin/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ password: pwd }),
     })
+    if (!loginResp.ok) {
+      let msg = '密码错误'
+      try { const e = await loginResp.json(); if (e?.message) msg = e.message } catch { /* */ }
+      throw new Error(msg)
+    }
+    const loginData = await loginResp.json()
+    if (!loginData.success) throw new Error(loginData.message || '登录失败')
+    adminToken.value = loginData.data.token
+
+    // 2. 用 token 获取知识库结构
+    const resp = await fetch('/api/admin/knowledge', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: adminToken.value }),
+    })
     if (!resp.ok) {
-      let msg = '验证失败'
+      let msg = '加载失败'
       try { const e = await resp.json(); if (e?.message) msg = e.message } catch { /* */ }
       throw new Error(msg)
     }
     const data = await resp.json()
     if (!data.success) throw new Error(data.message || '请求失败')
     authed.value = true
-    storedPwd.value = pwd
     structure.value = data.data
     loadPrompts()
     password.value = ''
@@ -54,7 +69,7 @@ const refreshStructure = async () => {
     const resp = await fetch('/api/admin/knowledge', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password: storedPwd.value }),
+      body: JSON.stringify({ token: adminToken.value }),
     })
     if (resp.ok) {
       const data = await resp.json()
@@ -94,7 +109,7 @@ const handleUpload = async () => {
   uploading.value = true
   uploadMsg.value = ''
   const form = new FormData()
-  form.append('password', storedPwd.value)
+  form.append('token', adminToken.value)
   form.append('category', cat)
   form.append('file', uploadFile.value)
   try {
@@ -144,7 +159,7 @@ const confirmDelete = async () => {
     const resp = await fetch('/api/admin/delete', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password: storedPwd.value, source }),
+      body: JSON.stringify({ token: adminToken.value, source }),
     })
     const data = await resp.json()
     if (!resp.ok) throw new Error(data.message || '删除失败')
@@ -193,7 +208,7 @@ const confirmCatChange = async () => {
     const resp = await fetch('/api/admin/category', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password: storedPwd.value, source: catTarget.value.source, category: newCat }),
+      body: JSON.stringify({ token: adminToken.value, source: catTarget.value.source, category: newCat }),
     })
     const data = await resp.json()
     if (!resp.ok) throw new Error(data.message || '更改失败')
@@ -223,7 +238,7 @@ const loadPrompts = async () => {
     const resp = await fetch('/api/admin/prompts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password: storedPwd.value }),
+      body: JSON.stringify({ token: adminToken.value }),
     })
     if (resp.ok) {
       const data = await resp.json()
@@ -238,7 +253,7 @@ const startPromptEdit = async (prompt) => {
     const resp = await fetch('/api/admin/prompt/read', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password: storedPwd.value, path: prompt.path }),
+      body: JSON.stringify({ token: adminToken.value, path: prompt.path }),
     })
     if (!resp.ok) throw new Error('读取失败')
     const data = await resp.json()
@@ -262,7 +277,7 @@ const savePrompt = async () => {
     const resp = await fetch('/api/admin/prompt/write', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password: storedPwd.value, path: editingPrompt.value.path, content: promptContent.value }),
+      body: JSON.stringify({ token: adminToken.value, path: editingPrompt.value.path, content: promptContent.value }),
     })
     const data = await resp.json()
     if (!resp.ok) throw new Error(data.message || '保存失败')
@@ -350,7 +365,7 @@ const saveChunk = async () => {
     const resp = await fetch('/api/admin/chunk/update', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password: storedPwd.value, chunk_id: editingChunk.value.chunk_id, content }),
+      body: JSON.stringify({ token: adminToken.value, chunk_id: editingChunk.value.chunk_id, content }),
     })
     const data = await resp.json()
     if (!resp.ok) throw new Error(data.message || '更新失败')

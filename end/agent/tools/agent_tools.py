@@ -130,10 +130,11 @@ def get_user_profile() -> str:
 
 @tool(description="获取当前日期")
 def get_current_date() -> str:
-    month = _user_context.get("month")
-    if month:
-        return month
     return datetime.now().strftime("%Y-%m-%d")
+
+@tool(description="获取当前月份")
+def get_current_month() -> str:
+    return datetime.now().strftime("%Y-%m")
 
 
 def generate_external_data():

@@ -1,4 +1,6 @@
 import os
+import secrets
+import time
 import uuid
 from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Form
 from fastapi.exceptions import RequestValidationError
@@ -257,8 +259,18 @@ def rag_search(payload: SearchRequest):
 # ── 管理端接口 ──
 
 ADMIN_PASSWORD = "796581"
+TOKEN_EXPIRE_SECONDS = 86400  # 24 小时
 
+_sessions: dict[str, float] = {}  # token → 过期时间戳
 _data_path: str | None = None
+
+
+def _cleanup_sessions():
+    """清理过期 token。"""
+    now = time.time()
+    expired = [t for t, exp in _sessions.items() if exp < now]
+    for t in expired:
+        del _sessions[t]
 
 
 def _get_data_dir() -> str:
@@ -271,9 +283,10 @@ def _get_data_dir() -> str:
     return _data_path
 
 
-def _check_admin(password: str):
-    if password != ADMIN_PASSWORD:
-        raise HTTPException(status_code=403, detail="密码错误，无权访问")
+def _check_token(token: str):
+    _cleanup_sessions()
+    if token not in _sessions:
+        raise HTTPException(status_code=403, detail="令牌无效或已过期，请重新登录")
 
 
 def _allowed_ext(filename: str) -> bool:
@@ -282,13 +295,32 @@ def _allowed_ext(filename: str) -> bool:
     return ext in chroma_conf.get("allow_knowledge_file_type", [".pdf", ".txt"])
 
 
-class AdminAuthRequest(BaseModel):
+# ── 登录 ──
+
+class AdminLoginRequest(BaseModel):
     password: str
 
 
+@app.post("/api/admin/login", response_model=ApiResponse)
+def admin_login(payload: AdminLoginRequest):
+    if payload.password != ADMIN_PASSWORD:
+        raise HTTPException(status_code=403, detail="密码错误")
+    _cleanup_sessions()
+    token = secrets.token_hex(32)
+    _sessions[token] = time.time() + TOKEN_EXPIRE_SECONDS
+    loggers.info(f"管理端登录成功，当前活跃会话: {len(_sessions)}")
+    return success_response("登录成功", {"token": token})
+
+
+# ── 知识库管理 ──
+
+class AdminTokenRequest(BaseModel):
+    token: str
+
+
 @app.post("/api/admin/knowledge", response_model=ApiResponse)
-def admin_knowledge(payload: AdminAuthRequest):
-    _check_admin(payload.password)
+def admin_knowledge(payload: AdminTokenRequest):
+    _check_token(payload.token)
     try:
         rag = get_rag_service()
         structure = rag.vector_store.get_detailed_structure()
@@ -300,11 +332,11 @@ def admin_knowledge(payload: AdminAuthRequest):
 
 @app.post("/api/admin/upload")
 async def admin_upload(
-    password: str = Form(...),
+    token: str = Form(...),
     category: str = Form(default="扫地机器人客服"),
     file: UploadFile = File(...),
 ):
-    _check_admin(password)
+    _check_token(token)
 
     if not file.filename:
         raise HTTPException(status_code=400, detail="未选择文件")
@@ -350,13 +382,13 @@ async def admin_upload(
 
 
 class AdminDeleteRequest(BaseModel):
-    password: str
+    token: str
     source: str  # 文件完整路径
 
 
 @app.post("/api/admin/delete", response_model=ApiResponse)
 def admin_delete(payload: AdminDeleteRequest):
-    _check_admin(payload.password)
+    _check_token(payload.token)
 
     source = payload.source.strip()
     if not source or not os.path.exists(source):
@@ -385,14 +417,14 @@ def admin_delete(payload: AdminDeleteRequest):
 
 
 class AdminCategoryRequest(BaseModel):
-    password: str
+    token: str
     source: str
     category: str
 
 
 @app.post("/api/admin/category", response_model=ApiResponse)
 def admin_change_category(payload: AdminCategoryRequest):
-    _check_admin(payload.password)
+    _check_token(payload.token)
 
     source = payload.source.strip()
     new_category = payload.category.strip()
@@ -418,14 +450,14 @@ def admin_change_category(payload: AdminCategoryRequest):
 
 
 class AdminChunkUpdateRequest(BaseModel):
-    password: str
+    token: str
     chunk_id: str
     content: str
 
 
 @app.post("/api/admin/chunk/update", response_model=ApiResponse)
 def admin_chunk_update(payload: AdminChunkUpdateRequest):
-    _check_admin(payload.password)
+    _check_token(payload.token)
 
     chunk_id = payload.chunk_id.strip()
     content = payload.content.strip()
@@ -469,9 +501,9 @@ def _get_prompt_config() -> dict[str, str]:
 
 
 @app.post("/api/admin/prompts", response_model=ApiResponse)
-def admin_prompts_list(payload: AdminAuthRequest):
+def admin_prompts_list(payload: AdminTokenRequest):
     """列出所有提示词文件。"""
-    _check_admin(payload.password)
+    _check_token(payload.token)
     prompts = []
     for label, path in _get_prompt_config().items():
         exists = os.path.isfile(path)
@@ -487,14 +519,14 @@ def admin_prompts_list(payload: AdminAuthRequest):
 
 
 class AdminPromptReadRequest(BaseModel):
-    password: str
+    token: str
     path: str
 
 
 @app.post("/api/admin/prompt/read", response_model=ApiResponse)
 def admin_prompt_read(payload: AdminPromptReadRequest):
     """读取指定提示词文件内容。"""
-    _check_admin(payload.password)
+    _check_token(payload.token)
     path = payload.path.strip()
     if not path or not os.path.isfile(path):
         raise HTTPException(status_code=400, detail="文件不存在")
@@ -513,7 +545,7 @@ def admin_prompt_read(payload: AdminPromptReadRequest):
 
 
 class AdminPromptWriteRequest(BaseModel):
-    password: str
+    token: str
     path: str
     content: str
 
@@ -521,7 +553,7 @@ class AdminPromptWriteRequest(BaseModel):
 @app.post("/api/admin/prompt/write", response_model=ApiResponse)
 def admin_prompt_write(payload: AdminPromptWriteRequest):
     """覆写提示词文件。"""
-    _check_admin(payload.password)
+    _check_token(payload.token)
     path = payload.path.strip()
     if not path or not os.path.isfile(path):
         raise HTTPException(status_code=400, detail="文件不存在")
