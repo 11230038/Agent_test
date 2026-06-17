@@ -8,28 +8,30 @@
 
 ### 客服对话
 
-- **智能问答** — 基于 RAG 知识库 + LLM，回答产品功能、故障排除、选购建议等问题
+- **智能问答** — 基于 RAG 知识库 + LLM，自动查询改写 + 多路检索，回答更精准
 - **纯聊天** — 无工具无知识库的闲聊模式
 - **知识库检索** — 直接搜索知识库，查看匹配的文档片段及相关性分值
-- **流式输出** — 对话采用 SSE 流式传输，逐字渲染
+- **流式输出** — 对话采用 SSE 流式传输，Markdown 富文本渲染（表格/代码块/引用）
+- **停止生成** — 支持中途中断 LLM 输出（AbortController）
 - **多轮对话** — 自动携带历史消息，上下文感知
 
 ### 管理后台
 
-- 🔐 密码验证保护
+- 🔐 JWT 令牌认证（24h 过期，重启不丢失）
 - 📊 知识库结构树（分类 → 文件 → Chunk）
 - 📤 上传 PDF/TXT 文档并自动索引
 - 🗑️ 删除文档（磁盘 + 向量库同步清理）
 - 📁 更改文档分类
 - 🔍 按内容关键词检索 Chunk
 - ✏️ 单独编辑任意 Chunk 内容
+- 📝 在线编辑 Prompt 模板（4 个提示词文件）
 
 ### 用户系统
 
 - 对话持久化（按会话存储）
 - 用户画像（城市/性别/年龄/偏好）
 - 反馈收集（点赞/踩 + 备注统计）
-- 自动画像提取（从对话中识别偏好和人口统计信息）
+- 自动画像提取（LLM 优先 + 关键词规则兜底）
 
 ---
 
@@ -55,8 +57,9 @@ Agent/
 │   └── 项目结构.md               # 后端模块详细说明
 ├── front/                        # 前端（Vue 3 + Vite）
 │   ├── src/
-│   │   ├── views/ChatView.vue    # 聊天页
-│   │   ├── views/AdminView.vue   # 管理页
+│   │   ├── views/ChatView.vue    # 聊天页（marked + DOMPurify + AbortController）
+│   │   ├── views/AdminView.vue   # 管理页（Composable 拆分）
+│   │   ├── composables/          # 状态管理（使用AdminAuth/KnowledgeBase/ChunkEditor/PromptEditor）
 │   │   ├── router/index.js       # 路由
 │   │   └── App.vue               # 顶层 Shell
 │   ├── 接口文档.md               # 前端接口消费文档
@@ -79,7 +82,7 @@ Agent/
 ```bash
 # 后端（进入 end 目录）
 cd end
-pip install fastapi uvicorn langchain langchain-chroma langchain-community langchain-text-splitters dashscope pyyaml streamlit
+pip install fastapi uvicorn langchain langchain-chroma langchain-community langchain-text-splitters dashscope pyyaml streamlit pyjwt
 
 # 前端
 cd front
@@ -174,11 +177,15 @@ npm run dev
 | 画像 | `/api/profile/{id}` | GET | 获取画像 |
 | 反馈 | `/api/feedback` | POST | 提交反馈 |
 | 反馈 | `/api/feedback/stats` | GET | 反馈统计 |
+| 管理 | `/api/admin/login` | POST | 登录获取 JWT |
 | 管理 | `/api/admin/knowledge` | POST | 🔐 知识库结构 |
 | 管理 | `/api/admin/upload` | POST | 🔐 上传文档 |
 | 管理 | `/api/admin/delete` | POST | 🔐 删除文档 |
 | 管理 | `/api/admin/category` | POST | 🔐 改分类 |
 | 管理 | `/api/admin/chunk/update` | POST | 🔐 编辑 Chunk |
+| 管理 | `/api/admin/prompts` | POST | 🔐 提示词列表 |
+| 管理 | `/api/admin/prompt/read` | POST | 🔐 读取提示词 |
+| 管理 | `/api/admin/prompt/write` | POST | 🔐 写入提示词 |
 
 > 详细文档见：[end/接口文档.md](end/接口文档.md) / [front/接口文档.md](front/接口文档.md)
 
