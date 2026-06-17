@@ -448,6 +448,93 @@ def admin_chunk_update(payload: AdminChunkUpdateRequest):
     return success_response("chunk 已更新", {"chunk_id": chunk_id, "char_count": len(content)})
 
 
+# ── 提示词管理接口 ──
+
+def _get_prompt_config() -> dict[str, str]:
+    """返回 {显示名: 文件路径}。"""
+    from utils.config_handler import prompts_conf
+    from utils.path_tool import get_abs_path
+    mapping = {
+        "主 Agent 提示词": "main_prompt_path",
+        "RAG 总结提示词": "rag_summarize_prompt_path",
+        "报告生成提示词": "report_prompt_path",
+        "纯聊天提示词": "chat_prompt_path",
+    }
+    result = {}
+    for label, key in mapping.items():
+        rel = prompts_conf.get(key, "")
+        if rel:
+            result[label] = get_abs_path(rel)
+    return result
+
+
+@app.post("/api/admin/prompts", response_model=ApiResponse)
+def admin_prompts_list(payload: AdminAuthRequest):
+    """列出所有提示词文件。"""
+    _check_admin(payload.password)
+    prompts = []
+    for label, path in _get_prompt_config().items():
+        exists = os.path.isfile(path)
+        size = os.path.getsize(path) if exists else 0
+        prompts.append({
+            "name": label,
+            "path": path,
+            "filename": os.path.basename(path),
+            "exists": exists,
+            "size": size,
+        })
+    return success_response("ok", {"prompts": prompts})
+
+
+class AdminPromptReadRequest(BaseModel):
+    password: str
+    path: str
+
+
+@app.post("/api/admin/prompt/read", response_model=ApiResponse)
+def admin_prompt_read(payload: AdminPromptReadRequest):
+    """读取指定提示词文件内容。"""
+    _check_admin(payload.password)
+    path = payload.path.strip()
+    if not path or not os.path.isfile(path):
+        raise HTTPException(status_code=400, detail="文件不存在")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read()
+    except Exception as e:
+        loggers.error(f"读取提示词失败: {e}")
+        raise HTTPException(status_code=500, detail="读取失败") from e
+    return success_response("ok", {
+        "path": path,
+        "filename": os.path.basename(path),
+        "content": content,
+        "char_count": len(content),
+    })
+
+
+class AdminPromptWriteRequest(BaseModel):
+    password: str
+    path: str
+    content: str
+
+
+@app.post("/api/admin/prompt/write", response_model=ApiResponse)
+def admin_prompt_write(payload: AdminPromptWriteRequest):
+    """覆写提示词文件。"""
+    _check_admin(payload.password)
+    path = payload.path.strip()
+    if not path or not os.path.isfile(path):
+        raise HTTPException(status_code=400, detail="文件不存在")
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(payload.content)
+    except Exception as e:
+        loggers.error(f"写入提示词失败: {e}")
+        raise HTTPException(status_code=500, detail="写入失败") from e
+    loggers.info(f"管理端更新提示词成功: {os.path.basename(path)}")
+    return success_response("提示词已保存", {"filename": os.path.basename(path), "char_count": len(payload.content)})
+
+
 # ── 会话 & 画像接口 ──
 
 @app.get("/api/sessions", response_model=ApiResponse)

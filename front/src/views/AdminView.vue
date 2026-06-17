@@ -30,6 +30,7 @@ const unlock = async () => {
     authed.value = true
     storedPwd.value = pwd
     structure.value = data.data
+    loadPrompts()
     password.value = ''
   } catch (e) {
     error.value = e instanceof Error ? e.message : '请求失败'
@@ -210,6 +211,70 @@ const confirmCatChange = async () => {
   }
 }
 
+// ── 提示词管理 ──
+const prompts = ref([])
+const editingPrompt = ref(null)
+const promptContent = ref('')
+const savingPrompt = ref(false)
+const promptMsg = ref('')
+
+const loadPrompts = async () => {
+  try {
+    const resp = await fetch('/api/admin/prompts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: storedPwd.value }),
+    })
+    if (resp.ok) {
+      const data = await resp.json()
+      if (data.success) prompts.value = data.data.prompts
+    }
+  } catch { /* ignore */ }
+}
+
+const startPromptEdit = async (prompt) => {
+  promptMsg.value = ''
+  try {
+    const resp = await fetch('/api/admin/prompt/read', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: storedPwd.value, path: prompt.path }),
+    })
+    if (!resp.ok) throw new Error('读取失败')
+    const data = await resp.json()
+    editingPrompt.value = { ...prompt, content: data.data.content }
+    promptContent.value = data.data.content
+  } catch (e) {
+    promptMsg.value = '❌ ' + (e instanceof Error ? e.message : '读取失败')
+  }
+}
+
+const cancelPromptEdit = () => {
+  editingPrompt.value = null
+  promptContent.value = ''
+}
+
+const savePrompt = async () => {
+  if (!editingPrompt.value || savingPrompt.value) return
+  savingPrompt.value = true
+  promptMsg.value = ''
+  try {
+    const resp = await fetch('/api/admin/prompt/write', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: storedPwd.value, path: editingPrompt.value.path, content: promptContent.value }),
+    })
+    const data = await resp.json()
+    if (!resp.ok) throw new Error(data.message || '保存失败')
+    promptMsg.value = '✅ 提示词已保存'
+    editingPrompt.value = null
+  } catch (e) {
+    promptMsg.value = '❌ ' + (e instanceof Error ? e.message : '保存失败')
+  } finally {
+    savingPrompt.value = false
+  }
+}
+
 // ── Chunk 检索 ──
 const chunkSearch = ref('')
 const debouncedSearch = ref('')
@@ -354,6 +419,21 @@ const saveChunk = async () => {
         <p v-if="uploadMsg" class="action-msg" :class="{ 'msg-error': uploadMsg.startsWith('❌') }">{{ uploadMsg }}</p>
       </div>
 
+      <!-- ═══ 提示词管理 ═══ -->
+      <div class="prompts-card">
+        <h2>📝 提示词管理 <button class="mini-btn" title="刷新" @click="loadPrompts">🔄</button></h2>
+        <div class="prompts-list">
+          <div v-for="p in prompts" :key="p.path" class="prompt-row" @click="startPromptEdit(p)">
+            <span class="prompt-icon">📄</span>
+            <span class="prompt-name">{{ p.name }}</span>
+            <span class="prompt-file">{{ p.filename }}</span>
+            <span v-if="p.exists" class="prompt-size">{{ (p.size / 1024).toFixed(1) }} KB</span>
+            <span v-else class="prompt-missing">缺失</span>
+          </div>
+        </div>
+        <p v-if="promptMsg && !editingPrompt" class="action-msg" :class="{ 'msg-error': promptMsg.startsWith('❌') }">{{ promptMsg }}</p>
+      </div>
+
       <!-- ═══ Chunk 检索栏 ═══ -->
       <div class="search-bar">
         <span class="search-icon">🔍</span>
@@ -482,6 +562,26 @@ const saveChunk = async () => {
       </div>
     </Teleport>
 
+    <!-- ═══ 提示词编辑弹窗 ═══ -->
+    <Teleport to="body">
+      <div v-if="editingPrompt" class="modal-overlay" @click.self="cancelPromptEdit">
+        <div class="modal-card modal-card--wide">
+          <h2>📝 编辑提示词</h2>
+          <p class="modal-sub">{{ editingPrompt.name }}（{{ editingPrompt.filename }}）</p>
+          <textarea v-model="promptContent" class="prompt-edit-textarea"
+            :disabled="savingPrompt" rows="18"></textarea>
+          <p class="chunk-edit-chars">{{ promptContent.length }} 字符</p>
+          <p v-if="promptMsg" class="action-msg" :class="{ 'msg-error': promptMsg.startsWith('❌') }">{{ promptMsg }}</p>
+          <div class="modal-actions">
+            <button class="action-btn action-btn--upload" :disabled="savingPrompt" @click="savePrompt">
+              {{ savingPrompt ? '保存中...' : '保存修改' }}
+            </button>
+            <button class="action-btn action-btn--cancel" :disabled="savingPrompt" @click="cancelPromptEdit">取消</button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+
     <!-- ═══ 删除确认弹窗 ═══ -->
     <Teleport to="body">
       <div v-if="deleteTarget" class="modal-overlay" @click.self="cancelDelete">
@@ -540,6 +640,20 @@ const saveChunk = async () => {
 .category-combo { display: flex; gap: 8px; align-items: center; }
 .category-combo select { padding: 8px 12px; border: 1px solid rgba(148, 163, 184, 0.4); border-radius: 10px; font: inherit; font-size: 0.86rem; outline: none; }
 .cat-input { padding: 8px 12px; border: 1px solid rgba(148, 163, 184, 0.4); border-radius: 10px; font: inherit; font-size: 0.86rem; width: 130px; outline: none; }
+
+/* ── 提示词管理 ── */
+.prompts-card { margin-bottom: 20px; padding: 20px; border: 1px solid rgba(148, 163, 184, 0.2); border-radius: 16px; background: #ffffff; box-shadow: 0 4px 12px rgba(15, 23, 42, 0.03); }
+.prompts-card h2 { font-size: 1.05rem; font-weight: 700; color: #0f172a; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+.prompts-list { display: flex; flex-direction: column; gap: 6px; }
+.prompt-row { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-radius: 10px; background: #f8fafc; border: 1px solid rgba(148, 163, 184, 0.08); cursor: pointer; transition: border-color 0.12s, background 0.12s; }
+.prompt-row:hover { border-color: #93c5fd; background: #eff6ff; }
+.prompt-icon { font-size: 0.9rem; }
+.prompt-name { font-weight: 600; color: #1e293b; font-size: 0.88rem; }
+.prompt-file { font-family: monospace; font-size: 0.76rem; color: #64748b; }
+.prompt-size { font-size: 0.74rem; color: #94a3b8; margin-left: auto; }
+.prompt-missing { font-size: 0.74rem; color: #dc2626; margin-left: auto; font-weight: 600; }
+.prompt-edit-textarea { width: 100%; padding: 14px; border: 1px solid rgba(148, 163, 184, 0.3); border-radius: 12px; font: inherit; font-size: 0.86rem; line-height: 1.7; resize: vertical; outline: none; color: #0f172a; font-family: 'Consolas', 'Courier New', monospace; }
+.prompt-edit-textarea:focus { border-color: rgba(37, 99, 235, 0.5); box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.08); }
 
 /* ── 检索栏 ── */
 .search-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 20px; padding: 12px 16px; border: 1px solid rgba(148, 163, 184, 0.2); border-radius: 14px; background: #fff; }
