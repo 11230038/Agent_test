@@ -1,7 +1,7 @@
 <script setup>
 import { computed, nextTick, ref, watch } from 'vue'
 
-const SESSION_ID = 'sess_' + Math.random().toString(36).slice(2, 10)
+const sessionId = ref('sess_' + Math.random().toString(36).slice(2, 10))
 const MODE_CHAT = 'chat'
 const MODE_SEARCH = 'search'
 const MODE_CHAT_ONLY = 'chat_only'
@@ -84,6 +84,15 @@ const scrollToBottom = async () => {
   chatBodyRef.value.scrollTop = chatBodyRef.value.scrollHeight
 }
 
+const newConversation = () => {
+  if (abortController.value) abortController.value.abort()
+  sessionId.value = 'sess_' + Math.random().toString(36).slice(2, 10)
+  messages.value = [{ role: 'assistant', content: MODE_GREETINGS[mode.value] }]
+  searchResults.value = []
+  errorMessage.value = ''
+  loading.value = false
+}
+
 const switchMode = (newMode) => {
   mode.value = newMode
   searchResults.value = []
@@ -143,12 +152,13 @@ const sendMessage = async () => {
   abortController.value = new AbortController()
 
   const history = messages.value.slice(-16, -1).map((m) => ({ role: m.role, content: m.content }))
+  let idx = -1  // 提升到 try 外部，供 catch 使用
 
   try {
     const response = await fetch('/api/chat/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message, history, session_id: SESSION_ID, user_context: DEFAULT_USER_CONTEXT, mode: mode.value }),
+      body: JSON.stringify({ message, history, session_id: sessionId.value, user_context: DEFAULT_USER_CONTEXT, mode: mode.value }),
       signal: abortController.value.signal,
     })
 
@@ -166,7 +176,7 @@ const sendMessage = async () => {
     let content = ''
 
     messages.value.push({ role: 'assistant', content: '' })
-    const idx = messages.value.length - 1
+    idx = messages.value.length - 1
 
     while (true) {
       const { done, value } = await reader.read()
@@ -196,10 +206,20 @@ const sendMessage = async () => {
     }
     messages.value[idx].content = content.trim()
   } catch (error) {
-    if (error.name === 'AbortError') {
-      // 用户主动停止，不显示错误
-      if (!messages.value[idx].content.trim()) {
-        messages.value[idx].content = '（已停止生成）'
+    const isAborted =
+      error?.name === 'AbortError' ||
+      (error instanceof DOMException && error.name === 'AbortError') ||
+      (error?.message || '').includes('abort') ||
+      (error?.message || '').includes('AbortError') ||
+      (error?.message || '').includes('The operation was aborted') ||
+      abortController.value?.signal?.aborted === true
+
+    if (isAborted) {
+      if (idx >= 0 && messages.value[idx]) {
+        const current = messages.value[idx].content.trim()
+        messages.value[idx].content = current
+          ? current + '\n\n---\n*⏹ 输出已被终止*'
+          : '*⏹ 输出已被终止*'
       }
     } else {
       errorMessage.value = error instanceof Error ? error.message : '请求失败，请稍后重试。'
@@ -245,8 +265,11 @@ watch(
           <select class="mode-select" :value="mode" @change="e => switchMode(e.target.value)">
             <option v-for="m in MODES" :key="m" :value="m">{{ m === MODE_CHAT_ONLY ? '💬 仅聊天' : m === MODE_CHAT ? '🤖 智能问答' : '🔍 知识库检索' }}</option>
           </select>
-          <div class="chat-status" :class="{ 'chat-status--loading': loading }">
-            {{ loading ? '正在查询...' : '可以开始提问' }}
+          <div class="header-actions">
+            <button class="new-chat-btn" @click="newConversation">＋ 新对话</button>
+            <div class="chat-status" :class="{ 'chat-status--loading': loading }">
+              {{ loading ? '正在查询...' : '可以开始提问' }}
+            </div>
           </div>
         </div>
       </header>
@@ -381,12 +404,36 @@ watch(
   font-size: 0.88rem;
 }
 
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .header-right {
   display: flex;
   flex-direction: column;
   align-items: flex-end;
   gap: 8px;
   flex-shrink: 0;
+}
+
+.new-chat-btn {
+  padding: 6px 14px;
+  border: 1.5px solid rgba(37, 99, 235, 0.25);
+  border-radius: 10px;
+  background: #eff6ff;
+  color: #2563eb;
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.new-chat-btn:hover {
+  background: #dbeafe;
+  border-color: #2563eb;
 }
 
 .mode-select {

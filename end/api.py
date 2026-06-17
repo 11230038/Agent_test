@@ -193,6 +193,7 @@ def chat_stream(req: ChatRequest):
         import threading
 
         q: queue.Queue = queue.Queue()
+        interrupted = False
 
         def run():
             try:
@@ -212,22 +213,28 @@ def chat_stream(req: ChatRequest):
         t = threading.Thread(target=run, daemon=True)
         t.start()
 
-        while True:
-            try:
-                msg_type, data = q.get(timeout=4)
-                if msg_type == "done":
-                    break
-                if msg_type == "error":
-                    yield f"data: [ERROR] {data}\n\n"
-                    break
-                for line in data.split("\n"):
-                    yield f"data: {line}\n"
-                yield "\n"
-                loggers.info(f"[{trace_id}] SSE → {repr(data[:80])}")
-            except queue.Empty:
-                yield "data: \n\n"
+        try:
+            while True:
+                try:
+                    msg_type, data = q.get(timeout=4)
+                    if msg_type == "done":
+                        break
+                    if msg_type == "error":
+                        yield f"data: [ERROR] {data}\n\n"
+                        break
+                    for line in data.split("\n"):
+                        yield f"data: {line}\n"
+                    yield "\n"
+                    loggers.info(f"[{trace_id}] SSE → {repr(data[:80])}")
+                except queue.Empty:
+                    yield "data: \n\n"
+        except GeneratorExit:
+            interrupted = True
 
-        loggers.info(f"[{trace_id}] 流式聊天请求完成")
+        if interrupted:
+            loggers.info(f"[{trace_id}] 流式聊天被用户中断")
+        else:
+            loggers.info(f"[{trace_id}] 流式聊天请求完成")
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 
