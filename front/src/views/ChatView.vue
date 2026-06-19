@@ -1,5 +1,5 @@
 <script setup>
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 
 const sessionId = ref('sess_' + Math.random().toString(36).slice(2, 10))
 const MODE_CHAT = 'chat'
@@ -47,6 +47,12 @@ function renderMarkdown(text) {
     return '<p>' + b.replace(/\n/g, '<br>') + '</p>'
   }).join('')
 
+  // 参考来源 — 提取到末尾独立显示
+  html = html.replace(/([。！？\)）])\s*(?:📎\s*)?参考来源[：:]\s*(.+)/, (_, before, source) => {
+    return before + '</p><p class="ref-source"><span class="ref-label">📎 参考来源：</span>' + source + '</p><p>'
+  })
+  html = html.replace(/<p>\s*<\/p>/g, '')  // 清理空段落
+
   return html
 }
 
@@ -91,6 +97,7 @@ const newConversation = () => {
   searchResults.value = []
   errorMessage.value = ''
   loading.value = false
+  currentSessionName.value = ''
 }
 
 const switchMode = (newMode) => {
@@ -99,6 +106,67 @@ const switchMode = (newMode) => {
   messages.value = [{ role: 'assistant', content: MODE_GREETINGS[newMode] }]
   errorMessage.value = ''
 }
+
+// ── 会话侧栏 ──
+const showSidebar = ref(false)
+const sessions = ref([])
+const loadingSessions = ref(false)
+const currentSessionName = ref('')
+
+const loadSessions = async () => {
+  loadingSessions.value = true
+  try {
+    const url = mode.value !== 'search'
+      ? `/api/sessions?mode=${mode.value}`
+      : '/api/sessions'
+    const resp = await fetch(url)
+    const data = await resp.json()
+    if (data.success) {
+      sessions.value = data.data.sessions.map(s => ({
+        ...s,
+        label: new Date(s.last_active * 1000).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
+        title: (s.preview || '').slice(0, 30) || '(空对话)',
+      }))
+    }
+  } catch { /* ignore */ }
+  loadingSessions.value = false
+}
+
+const loadSession = async (sid) => {
+  try {
+    const resp = await fetch(`/api/session/${sid}`)
+    const data = await resp.json()
+    if (data.success && data.data.history.length > 0) {
+      sessionId.value = sid
+      messages.value = data.data.history
+      searchResults.value = []
+      errorMessage.value = ''
+      showSidebar.value = false
+      currentSessionName.value = sid
+      await nextTick()
+      scrollToBottom()
+    }
+  } catch { /* ignore */ }
+}
+
+const exportConversation = () => {
+  if (messages.value.length === 0) return
+  const lines = messages.value.map(m => {
+    const role = m.role === 'user' ? '我' : '小扫'
+    const text = m.content.replace(/\n/g, '\n> ')
+    return `### ${role}\n> ${text}\n`
+  })
+  const md = `# 对话记录\n\n日期: ${new Date().toLocaleString('zh-CN')}\n\n---\n\n${lines.join('\n')}`
+  const blob = new Blob([md], { type: 'text/markdown' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `对话记录_${new Date().toISOString().slice(0, 10)}.md`
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+onMounted(() => { loadSessions() })
 
 const sendSearch = async () => {
   const query = inputValue.value.trim()
@@ -251,31 +319,37 @@ watch(
 </script>
 
 <template>
+  <div>
   <div class="chat-page">
     <section class="chat-card">
       <header class="chat-header">
-        <div class="chat-heading">
-          <p class="chat-kicker">{{ MODE_LABELS[mode] }}</p>
-          <h1>{{ MODE_TITLES[mode] }}</h1>
-          <p class="chat-subtitle">
-            {{ mode === MODE_CHAT_ONLY ? '纯聊天模式，不使用工具和知识库，陪你轻松对话。' : mode === MODE_CHAT ? '智能问答模式，支持多轮对话、知识库检索与上下文理解。' : '知识库检索模式，直接查看匹配的参考资料及相关性分值。' }}
-          </p>
+        <div class="header-left">
+          <div class="avatar-ring">
+            <span class="avatar-icon">{{ mode === MODE_CHAT_ONLY ? '💬' : mode === MODE_CHAT ? '🤖' : '🔍' }}</span>
+          </div>
+          <div class="chat-heading">
+            <h1>{{ MODE_TITLES[mode] }}</h1>
+            <p class="chat-subtitle">
+              {{ mode === MODE_CHAT_ONLY ? '纯聊天模式 · 轻松对话' : mode === MODE_CHAT ? '智能问答 · RAG + 工具' : '知识库检索 · 直接搜索' }}
+            </p>
+          </div>
         </div>
         <div class="header-right">
           <select class="mode-select" :value="mode" @change="e => switchMode(e.target.value)">
             <option v-for="m in MODES" :key="m" :value="m">{{ m === MODE_CHAT_ONLY ? '💬 仅聊天' : m === MODE_CHAT ? '🤖 智能问答' : '🔍 知识库检索' }}</option>
           </select>
           <div class="header-actions">
+            <button v-if="mode !== MODE_SEARCH" class="icon-btn" title="历史对话" @click="showSidebar = !showSidebar; loadSessions()">📋</button>
+            <button v-if="mode !== MODE_SEARCH" class="icon-btn" title="导出对话" @click="exportConversation">📥</button>
             <button class="new-chat-btn" @click="newConversation">＋ 新对话</button>
             <div class="chat-status" :class="{ 'chat-status--loading': loading }">
-              {{ loading ? '正在查询...' : '可以开始提问' }}
+              {{ loading ? '生成中...' : '在线' }}
             </div>
           </div>
         </div>
       </header>
 
       <main ref="chatBodyRef" class="chat-body">
-        <!-- 对话消息（聊天 / 仅聊天 / 智能问答） -->
         <div v-if="mode !== MODE_SEARCH">
           <div
             v-for="(message, index) in messages"
@@ -283,27 +357,27 @@ watch(
             class="message-row"
             :class="`message-row--${message.role}`"
           >
-            <div class="message-bubble">
-              <span class="message-role">{{ message.role === 'user' ? '我' : '助手' }}</span>
-              <p v-if="message.role === 'user'">{{ message.content }}</p>
-            <div v-else class="markdown-body" v-html="renderMarkdown(message.content)"></div>
+            <div class="msg-avatar">{{ message.role === 'user' ? '👤' : '🤖' }}</div>
+            <div class="msg-body">
+              <div class="msg-sender">{{ message.role === 'user' ? '我' : '小扫' }}</div>
+              <div class="message-bubble">
+                <p v-if="message.role === 'user'">{{ message.content }}</p>
+                <div v-else class="markdown-body" v-html="renderMarkdown(message.content)"></div>
+              </div>
             </div>
           </div>
         </div>
 
-        <!-- 检索模式结果 -->
         <div v-if="mode === MODE_SEARCH && searchResults.length > 0" class="search-results">
-          <p class="search-summary">找到 {{ searchResults.length }} 条相关参考资料</p>
+          <p class="search-summary">🔍 找到 {{ searchResults.length }} 条结果</p>
           <div v-for="(r, idx) in searchResults" :key="`sr-${idx}`" class="result-card">
             <div class="result-header">
               <span class="result-index">#{{ idx + 1 }}</span>
-              <span class="result-score">相关性 {{ r.score.toFixed(3) }}</span>
+              <span class="result-score">{{ r.score.toFixed(3) }}</span>
               <span class="result-category">{{ r.category }}</span>
-            </div>
-            <p class="result-content">{{ r.content }}</p>
-            <div class="result-footer">
               <span class="result-source">📄 {{ r.source }}</span>
             </div>
+            <p class="result-content">{{ r.content }}</p>
           </div>
         </div>
 
@@ -312,23 +386,23 @@ watch(
         </div>
 
         <div v-if="loading" class="message-row message-row--assistant">
-          <div class="message-bubble message-bubble--loading">
-            <span class="message-role">系统</span>
-            <p>正在{{ mode === MODE_SEARCH ? '检索' : '思考' }}中...</p>
+          <div class="msg-avatar">🤖</div>
+          <div class="msg-body">
+            <div class="msg-sender">小扫</div>
+            <div class="message-bubble message-bubble--loading">
+              <span class="loading-dots">思考中<span class="dot">.</span><span class="dot">.</span><span class="dot">.</span></span>
+            </div>
           </div>
         </div>
       </main>
 
-      <div class="chat-feedback">
-        <p class="input-hint">按 Enter 发送，Shift + Enter 换行</p>
-        <p v-if="errorMessage" class="error-text">{{ errorMessage }}</p>
-      </div>
+      <p v-if="errorMessage" class="error-text">{{ errorMessage }}</p>
 
       <footer class="chat-footer">
         <textarea
           v-model="inputValue"
           class="chat-input"
-          rows="3"
+          rows="2"
           :placeholder="placeholderText"
           :disabled="loading"
           @keydown="handleKeydown"
@@ -337,9 +411,7 @@ watch(
           v-if="loading && mode !== MODE_SEARCH"
           class="send-button send-button--stop"
           @click="stopGeneration"
-        >
-          ⏹ 停止生成
-        </button>
+        >停止</button>
         <button
           v-else
           class="send-button"
@@ -347,360 +419,282 @@ watch(
           :disabled="!canSend"
           @click="sendMessage"
         >
-          {{ loading ? '查询中...' : mode === MODE_SEARCH ? '搜索' : '发送' }}
+          {{ mode === MODE_SEARCH ? '搜索' : '发送' }}
         </button>
       </footer>
     </section>
+  </div>
+
+  <!-- ═══ 历史会话侧栏 ═══ -->
+  <Teleport to="body">
+    <div v-if="showSidebar" class="sidebar-overlay" @click.self="showSidebar = false">
+      <div class="sidebar-panel">
+        <div class="sidebar-header">
+          <h3>📋 历史对话 · {{ MODE_LABELS[mode] }}</h3>
+          <button class="icon-btn" @click="showSidebar = false">✕</button>
+        </div>
+        <div class="sidebar-body">
+          <div v-if="loadingSessions" class="sidebar-empty">加载中...</div>
+          <div v-else-if="sessions.length === 0" class="sidebar-empty">暂无历史对话</div>
+          <div
+            v-for="s in sessions"
+            :key="s.session_id"
+            class="session-item"
+            :class="{ 'session-item--active': s.session_id === sessionId }"
+            @click="loadSession(s.session_id)"
+          >
+            <span class="session-name">{{ s.title }}</span>
+            <span class="session-meta">{{ s.msg_count }} 条 · {{ s.label }}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </Teleport>
   </div>
 </template>
 
 <style scoped>
 .chat-page {
-  min-height: 100vh;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  min-height: calc(100vh - 60px);
+  display: flex; align-items: center; justify-content: center;
+  padding: 20px;
 }
-
 .chat-card {
-  width: min(960px, 100%);
-  height: min(760px, calc(100vh - 48px));
-  display: flex;
-  flex-direction: column;
-  border: 1px solid rgba(148, 163, 184, 0.24);
-  border-radius: 24px;
-  background: rgba(255, 255, 255, 0.88);
-  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.12);
-  backdrop-filter: blur(10px);
+  width: min(1000px, 100%);
+  height: min(800px, calc(100vh - 100px));
+  display: flex; flex-direction: column;
+  border: 1px solid rgba(148,163,184,0.05);
+  border-radius: 30px;
+  background: rgba(255,255,255,0.5);
+  box-shadow: 0 2px 20px rgba(15,23,42,0.03);
+  backdrop-filter: blur(22px) saturate(1.05);
   overflow: hidden;
 }
 
 .chat-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 28px 28px 20px;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 16px; padding: 18px 24px;
+  background: rgba(255,255,255,0.5);
+  border-bottom: 1px solid rgba(148,163,184,0.05);
 }
-
-.chat-heading h1 {
-  margin-top: 8px;
-  font-size: clamp(1.6rem, 2.6vw, 2.2rem);
-  font-weight: 700;
-  color: #0f172a;
-}
-
-.chat-kicker {
-  font-size: 0.82rem;
-  font-weight: 700;
-  letter-spacing: 0.12em;
-  color: #2563eb;
-}
-
-.chat-subtitle {
-  margin-top: 10px;
-  color: #475569;
-  font-size: 0.88rem;
-}
-
-.header-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.header-right {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 8px;
+.header-left { display: flex; align-items: center; gap: 12px; }
+.avatar-ring {
+  width: 42px; height: 42px; border-radius: 50%;
+  background: linear-gradient(135deg, rgba(37,99,235,0.1), rgba(124,58,237,0.06));
+  display: flex; align-items: center; justify-content: center;
+  border: 2px solid rgba(37,99,235,0.08);
   flex-shrink: 0;
 }
+.avatar-icon { font-size: 1.2rem; }
+.chat-heading h1 { font-size: 1.2rem; font-weight: 700; color: #0f172a; }
+.chat-subtitle { color: #94a3b8; font-size: 0.78rem; margin-top: 1px; }
+
+.header-right { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; flex-shrink: 0; }
+.header-actions { display: flex; align-items: center; gap: 8px; }
+
+.icon-btn {
+  width: 32px; height: 32px;
+  border: 1px solid rgba(148,163,184,0.1);
+  border-radius: 10px;
+  background: rgba(255,255,255,0.5);
+  font-size: 1rem; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: all 0.15s;
+}
+.icon-btn:hover { background: #fff; border-color: rgba(37,99,235,0.25); box-shadow: 0 2px 8px rgba(37,99,235,0.06); }
 
 .new-chat-btn {
-  padding: 6px 14px;
-  border: 1.5px solid rgba(37, 99, 235, 0.25);
+  padding: 7px 14px;
+  border: 1px solid rgba(37,99,235,0.1);
   border-radius: 10px;
-  background: #eff6ff;
+  background: rgba(239,246,255,0.4);
   color: #2563eb;
-  font: inherit;
-  font-size: 0.8rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 0.15s, border-color 0.15s;
+  font: inherit; font-size: 0.78rem; font-weight: 600;
+  cursor: pointer; transition: all 0.2s;
 }
-
-.new-chat-btn:hover {
-  background: #dbeafe;
-  border-color: #2563eb;
-}
+.new-chat-btn:hover { background: #dbeafe; border-color: rgba(37,99,235,0.25); transform: translateY(-1px); }
 
 .mode-select {
   padding: 8px 14px;
-  border: 1.5px solid rgba(148, 163, 184, 0.4);
+  border: 1px solid rgba(148,163,184,0.12);
   border-radius: 12px;
-  background: #fff;
-  color: #0f172a;
-  font-size: 0.82rem;
-  font-weight: 600;
-  cursor: pointer;
-  outline: none;
-  appearance: auto;
+  background: rgba(255,255,255,0.5);
+  color: #334155; font-size: 0.78rem; font-weight: 600;
+  cursor: pointer; outline: none; transition: all 0.2s;
 }
+.mode-select:hover { border-color: rgba(37,99,235,0.25); }
 
 .chat-status {
-  padding: 8px 14px;
-  border-radius: 999px;
-  background: #e0f2fe;
-  color: #0369a1;
-  font-size: 0.82rem;
-  font-weight: 600;
+  padding: 6px 12px; border-radius: 999px;
+  background: rgba(239,246,255,0.6); color: #2563eb;
+  font-size: 0.74rem; font-weight: 600;
+  display: flex; align-items: center; gap: 5px;
 }
+.chat-status::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: #22c55e; }
+.chat-status--loading::before { background: #f59e0b; animation: blink 1s infinite; }
+.chat-status--loading { background: rgba(254,243,199,0.6); color: #b45309; }
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.3} }
 
-.chat-status--loading {
-  background: #dbeafe;
-  color: #1d4ed8;
-}
+.chat-body { flex: 1; overflow-y: auto; padding: 20px 28px; scroll-behavior: smooth; }
 
-.chat-body {
-  flex: 1;
-  overflow-y: auto;
-  padding: 24px 28px;
-  background: linear-gradient(180deg, rgba(248, 250, 252, 0.9) 0%, rgba(241, 245, 249, 0.75) 100%);
-}
-
-/* ── 检索结果卡片 ── */
-.search-results {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.search-summary {
-  font-size: 0.88rem;
-  color: #475569;
-  margin-bottom: 4px;
-}
-
+/* ── 检索结果 ── */
+.search-results { display: flex; flex-direction: column; gap: 10px; }
+.search-summary { font-size: 0.84rem; color: #64748b; margin-bottom: 4px; }
 .result-card {
-  padding: 16px;
-  border: 1px solid rgba(148, 163, 184, 0.2);
-  border-radius: 14px;
-  background: #ffffff;
-  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.04);
+  padding: 16px 18px; border-radius: 16px;
+  background: rgba(255,255,255,0.5);
+  border: 1px solid rgba(148,163,184,0.06);
+  backdrop-filter: blur(6px);
 }
+.result-header { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+.result-index { font-size: 0.74rem; font-weight: 700; color: #94a3b8; }
+.result-score { font-size: 0.7rem; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: #dcfce7; color: #15803d; }
+.result-category { font-size: 0.7rem; padding: 2px 8px; border-radius: 999px; background: #eff6ff; color: #2563eb; }
+.result-source { font-size: 0.7rem; color: #94a3b8; }
+.result-content { font-size: 0.88rem; line-height: 1.65; color: #334155; white-space: pre-wrap; word-break: break-word; }
+.search-empty { text-align: center; padding: 60px 20px; color: #94a3b8; }
 
-.result-header {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 8px;
+/* ── 对话消息 ── */
+.message-row { display: flex; gap: 10px; margin-bottom: 22px; align-items: flex-start; }
+.message-row--user { flex-direction: row-reverse; }
+
+.msg-avatar {
+  width: 34px; height: 34px; border-radius: 50%;
+  background: rgba(255,255,255,0.5);
+  border: 1px solid rgba(148,163,184,0.06);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 0.9rem; flex-shrink: 0;
 }
-
-.result-index {
-  font-size: 0.78rem;
-  font-weight: 700;
-  color: #94a3b8;
-}
-
-.result-score {
-  font-size: 0.78rem;
-  font-weight: 600;
-  padding: 2px 10px;
-  border-radius: 999px;
-  background: #dcfce7;
-  color: #15803d;
-}
-
-.result-category {
-  font-size: 0.76rem;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: #eff6ff;
-  color: #2563eb;
-}
-
-.result-content {
-  font-size: 0.92rem;
-  line-height: 1.7;
-  color: #1e293b;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.result-footer {
-  margin-top: 10px;
-  font-size: 0.78rem;
-  color: #94a3b8;
-}
-
-.search-empty {
-  text-align: center;
-  padding: 60px 20px;
-  color: #94a3b8;
-  font-size: 0.92rem;
-}
-
-/* ── 对话消息（保留） ── */
-.message-row {
-  display: flex;
-  margin-bottom: 16px;
-}
-
-.message-row--assistant { justify-content: flex-start; }
-.message-row--user { justify-content: flex-end; }
+.msg-body { max-width: min(78%, 620px); }
+.msg-sender { font-size: 0.72rem; font-weight: 600; color: #94a3b8; margin-bottom: 4px; padding: 0 4px; }
+.message-row--user .msg-sender { text-align: right; }
 
 .message-bubble {
-  max-width: min(78%, 560px);
-  padding: 14px 16px;
-  border-radius: 20px;
-  background: #ffffff;
-  color: #0f172a;
-  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+  padding: 12px 16px; border-radius: 18px;
+  background: rgba(255,255,255,0.5);
+  color: #1e293b; line-height: 1.65;
+  box-shadow: 0 1px 6px rgba(15,23,42,0.03);
+  border: 1px solid rgba(148,163,184,0.04);
+  backdrop-filter: blur(6px);
 }
-
 .message-row--user .message-bubble {
-  background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
-  color: #eff6ff;
+  background: linear-gradient(135deg, #3b82f6, #2563eb);
+  color: #fff; border: none;
   border-bottom-right-radius: 8px;
+  box-shadow: 0 4px 14px rgba(37,99,235,0.18);
 }
-
 .message-row--assistant .message-bubble { border-bottom-left-radius: 8px; }
-.message-bubble--loading { background: #eff6ff; color: #1e3a8a; }
-
-.message-role {
-  display: inline-block;
-  margin-bottom: 6px;
-  font-size: 0.8rem;
-  font-weight: 700;
-  opacity: 0.8;
+.message-bubble--loading {
+  background: rgba(239,246,255,0.5); color: #2563eb;
+  border: 1px solid rgba(37,99,235,0.06);
 }
 
-.message-bubble p {
-  white-space: pre-wrap;
-  word-break: break-word;
-  line-height: 1.7;
-}
+.loading-dots { font-size: 0.88rem; }
+.dot { animation: dot-bounce 1.4s infinite; }
+.dot:nth-child(2) { animation-delay: 0.2s; }
+.dot:nth-child(3) { animation-delay: 0.4s; }
+@keyframes dot-bounce { 0%,80%,100%{opacity:0.2} 40%{opacity:1} }
 
+.message-bubble p { white-space: pre-wrap; word-break: break-word; }
+
+/* ── Markdown ── */
+.markdown-body { line-height: 1.7; color: #1e293b; word-break: break-word; }
+.markdown-body h1,.markdown-body h2,.markdown-body h3,.markdown-body h4 { margin: 14px 0 8px; font-weight: 700; color: #0f172a; }
+.markdown-body h1 { font-size: 1.3rem; border-bottom: 2px solid #e2e8f0; padding-bottom: 4px; }
+.markdown-body h2 { font-size: 1.15rem; }
+.markdown-body h3 { font-size: 1.02rem; }
+.markdown-body p { margin: 4px 0; }
 .markdown-body strong { font-weight: 700; }
-.markdown-body ul { padding-left: 18px; margin: 4px 0; }
-.markdown-body li { line-height: 1.6; margin: 2px 0; }
-.markdown-body hr { border: none; border-top: 1px solid #e2e8f0; margin: 12px 0; }
-.markdown-body p { margin: 6px 0; line-height: 1.7; }
+.markdown-body a { color: #2563eb; }
+.markdown-body ul,.markdown-body ol { padding-left: 20px; margin: 4px 0; }
+.markdown-body li { margin: 2px 0; }
+.markdown-body blockquote { margin: 8px 0; padding: 6px 14px; border-left: 3px solid #2563eb; background: #f0f6ff; border-radius: 0 6px 6px 0; }
+.markdown-body code { padding: 2px 5px; border-radius: 4px; background: #f1f5f9; color: #c7254e; font-family: 'Consolas',monospace; font-size: 0.87em; }
+.markdown-body pre { margin: 8px 0; padding: 12px 14px; border-radius: 10px; background: #1e293b; color: #e2e8f0; overflow-x: auto; font-size: 0.82rem; }
+.markdown-body pre code { padding: 0; background: none; color: inherit; }
+.markdown-body table { width: 100%; margin: 10px 0; border-collapse: collapse; font-size: 0.84rem; }
+.markdown-body th,.markdown-body td { padding: 7px 10px; border: 1px solid #e2e8f0; text-align: left; }
+.markdown-body th { background: #f8fafc; font-weight: 700; }
+.markdown-body tr:nth-child(even) td { background: #f8fafc; }
+.markdown-body hr { border: none; border-top: 1px solid #e2e8f0; margin: 14px 0; }
+.markdown-body :deep(.ref-source) { display: none; }
 
-.chat-feedback {
-  padding: 14px 28px 0;
-}
+/* ── Input ── */
+.error-text { margin: 0 28px; color: #dc2626; font-size: 0.84rem; }
 
-.input-hint {
-  font-size: 0.86rem;
-  color: #64748b;
-}
-
-.error-text {
-  margin-top: 8px;
-  color: #dc2626;
-  font-size: 0.92rem;
-}
-
-.chat-footer {
-  display: flex;
-  gap: 14px;
-  align-items: flex-end;
-  padding: 16px 28px 28px;
-}
+.chat-footer { display: flex; gap: 10px; align-items: flex-end; padding: 12px 22px 18px; }
 
 .chat-input {
-  flex: 1;
-  min-height: 88px;
-  padding: 14px 16px;
-  border: 1px solid rgba(148, 163, 184, 0.4);
+  flex: 1; min-height: 48px; max-height: 120px;
+  padding: 12px 16px;
+  border: 1.5px solid rgba(148,163,184,0.15);
   border-radius: 18px;
-  background: rgba(255, 255, 255, 0.94);
-  color: #0f172a;
-  font: inherit;
-  line-height: 1.7;
-  resize: none;
-  outline: none;
-  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  background: rgba(255,255,255,0.5);
+  color: #0f172a; font: inherit; line-height: 1.6;
+  resize: none; outline: none;
+  transition: all 0.25s;
 }
-
-.chat-input:focus {
-  border-color: rgba(37, 99, 235, 0.6);
-  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.12);
-}
-
-.chat-input:disabled {
-  cursor: not-allowed;
-  background: rgba(241, 245, 249, 0.9);
-}
+.chat-input:focus { border-color: rgba(37,99,235,0.35); box-shadow: 0 0 0 4px rgba(37,99,235,0.05); background: rgba(255,255,255,0.75); }
+.chat-input:disabled { opacity: 0.5; }
 
 .send-button {
-  min-width: 100px;
-  height: 52px;
-  padding: 0 20px;
-  border: none;
-  border-radius: 16px;
-  background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
-  color: #ffffff;
-  font: inherit;
-  font-weight: 700;
-  cursor: pointer;
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
-  box-shadow: 0 14px 28px rgba(37, 99, 235, 0.24);
+  min-width: 72px; height: 42px; padding: 0 16px;
+  border: none; border-radius: 14px;
+  background: linear-gradient(135deg, #3b82f6, #2563eb);
+  color: #fff; font: inherit; font-weight: 700; font-size: 0.86rem;
+  cursor: pointer; transition: all 0.2s;
+  box-shadow: 0 4px 12px rgba(37,99,235,0.2);
+  flex-shrink: 0;
 }
+.send-button:hover:enabled { transform: translateY(-2px); box-shadow: 0 6px 18px rgba(37,99,235,0.3); }
+.send-button:disabled { opacity: 0.4; box-shadow: none; cursor: not-allowed; }
+.send-button--search { background: linear-gradient(135deg, #10b981, #059669); box-shadow: 0 4px 12px rgba(5,150,105,0.2); }
+.send-button--stop { background: linear-gradient(135deg, #ef4444, #dc2626); box-shadow: 0 4px 12px rgba(220,38,38,0.25); animation: pulse-stop 1.5s ease-in-out infinite; }
+@keyframes pulse-stop { 0%,100%{box-shadow:0 4px 12px rgba(220,38,38,0.25)} 50%{box-shadow:0 4px 20px rgba(220,38,38,0.45)} }
 
-.send-button:hover:enabled { transform: translateY(-1px); }
-.send-button:disabled { cursor: not-allowed; opacity: 0.6; box-shadow: none; }
-
-.send-button--search {
-  background: linear-gradient(135deg, #059669 0%, #047857 100%);
-  box-shadow: 0 14px 28px rgba(5, 150, 105, 0.24);
+/* ── 历史侧栏 ── */
+.sidebar-overlay {
+  position: fixed; inset: 0; z-index: 2000;
+  display: flex; justify-content: flex-end;
+  background: rgba(15,23,42,0.2);
+  backdrop-filter: blur(4px);
 }
-
-.send-button--stop {
-  background: linear-gradient(135deg, #dc2626 0%, #991b1b 100%);
-  box-shadow: 0 14px 28px rgba(220, 38, 38, 0.3);
-  animation: pulse-stop 1.5s ease-in-out infinite;
+.sidebar-panel {
+  width: 340px; height: 100vh;
+  background: rgba(255,255,255,0.85);
+  backdrop-filter: blur(20px);
+  box-shadow: -8px 0 40px rgba(15,23,42,0.08);
+  display: flex; flex-direction: column;
 }
-
-@keyframes pulse-stop {
-  0%, 100% { box-shadow: 0 14px 28px rgba(220, 38, 38, 0.3); }
-  50% { box-shadow: 0 14px 36px rgba(220, 38, 38, 0.5); }
+.sidebar-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 20px 22px;
+  border-bottom: 1px solid rgba(148,163,184,0.08);
+  background: linear-gradient(180deg, rgba(248,250,255,0.9), transparent);
 }
+.sidebar-header h3 { font-size: 1.1rem; font-weight: 700; color: #0f172a; }
+.sidebar-body { flex: 1; overflow-y: auto; padding: 10px 12px; }
+.sidebar-empty { text-align: center; padding: 60px 20px; color: #94a3b8; font-size: 0.88rem; }
+.session-item {
+  padding: 13px 16px; border-radius: 12px; cursor: pointer;
+  transition: all 0.15s; margin-bottom: 3px;
+  display: flex; flex-direction: column; gap: 3px;
+  border: 1px solid transparent;
+}
+.session-item:hover { background: #f8faff; border-color: rgba(37,99,235,0.08); }
+.session-item--active { background: #eff6ff; border-color: rgba(37,99,235,0.15); }
+.session-name { font-size: 0.88rem; font-weight: 600; color: #1e293b; }
+.session-meta { font-size: 0.74rem; color: #94a3b8; }
 
 @media (max-width: 768px) {
-  .chat-card {
-    height: calc(100vh - 24px);
-    border-radius: 20px;
-  }
-
-  .chat-header, .chat-body, .chat-feedback, .chat-footer {
-    padding-left: 18px;
-    padding-right: 18px;
-  }
-
-  .chat-header {
-    flex-direction: column;
-    align-items: flex-start;
-    padding-top: 22px;
-    padding-bottom: 18px;
-  }
-
-  .header-right {
-    flex-direction: row;
-    align-items: center;
-    width: 100%;
-  }
-
-  .chat-footer {
-    flex-direction: column;
-    align-items: stretch;
-    padding-bottom: 18px;
-  }
-
+  .sidebar-panel { width: 100vw; }
+  .chat-page { padding: 8px; }
+  .chat-card { height: calc(100vh - 16px); border-radius: 20px; }
+  .chat-header,.chat-body { padding-left: 14px; padding-right: 14px; }
+  .chat-header { flex-wrap: wrap; padding-top: 14px; padding-bottom: 12px; }
+  .header-right { flex-direction: row; align-items: center; width: 100%; }
+  .chat-footer { flex-direction: column; align-items: stretch; padding: 10px 14px 14px; }
   .send-button { width: 100%; }
-  .message-bubble { max-width: 88%; }
+  .msg-body { max-width: 85%; }
 }
 </style>

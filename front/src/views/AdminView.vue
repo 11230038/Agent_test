@@ -276,7 +276,7 @@ const handleKeydown = (e) => { if (e.key === 'Enter') unlock() }
 .empty-state { text-align: center; padding: 60px 20px; color: #94a3b8; }
 
 /* ── 上传 ── */
-.upload-card { margin-bottom: 20px; padding: 20px; border: 1px solid rgba(148, 163, 184, 0.2); border-radius: 16px; background: #ffffff; box-shadow: 0 4px 12px rgba(15, 23, 42, 0.03); }
+.upload-card { margin-bottom: 20px; padding: 20px; border: 1px solid rgba(148, 163, 184, 0.2); border-radius: 16px; background: rgba(255,255,255,0.5); box-shadow: 0 4px 12px rgba(15, 23, 42, 0.03); }
 .upload-card h2 { font-size: 1.05rem; font-weight: 700; color: #0f172a; margin-bottom: 12px; }
 .upload-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .upload-row input[type="file"] { font-size: 0.88rem; }
@@ -285,7 +285,7 @@ const handleKeydown = (e) => { if (e.key === 'Enter') unlock() }
 .cat-input { padding: 8px 12px; border: 1px solid rgba(148, 163, 184, 0.4); border-radius: 10px; font: inherit; font-size: 0.86rem; width: 130px; outline: none; }
 
 /* ── 提示词管理 ── */
-.prompts-card { margin-bottom: 20px; padding: 20px; border: 1px solid rgba(148, 163, 184, 0.2); border-radius: 16px; background: #ffffff; box-shadow: 0 4px 12px rgba(15, 23, 42, 0.03); }
+.prompts-card { margin-bottom: 20px; padding: 20px; border: 1px solid rgba(148, 163, 184, 0.2); border-radius: 16px; background: rgba(255,255,255,0.5); box-shadow: 0 4px 12px rgba(15, 23, 42, 0.03); }
 .prompts-card h2 { font-size: 1.05rem; font-weight: 700; color: #0f172a; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
 .prompts-list { display: flex; flex-direction: column; gap: 6px; }
 .prompt-row { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-radius: 10px; background: #f8fafc; border: 1px solid rgba(148, 163, 184, 0.08); cursor: pointer; transition: border-color 0.12s, background 0.12s; }
@@ -334,7 +334,7 @@ const handleKeydown = (e) => { if (e.key === 'Enter') unlock() }
 
 /* ── 弹窗 ── */
 .modal-overlay { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; background: rgba(15, 23, 42, 0.45); backdrop-filter: blur(4px); }
-.modal-card { width: min(440px, 92vw); padding: 32px; border-radius: 20px; background: #ffffff; box-shadow: 0 24px 60px rgba(15, 23, 42, 0.2); text-align: center; }
+.modal-card { width: min(440px, 92vw); padding: 32px; border-radius: 20px; background: #fff; box-shadow: 0 24px 60px rgba(15, 23, 42, 0.2); text-align: center; }
 .modal-card--wide { width: min(680px, 94vw); text-align: left; }
 .modal-card h2 { font-size: 1.3rem; font-weight: 700; color: #0f172a; margin-bottom: 16px; }
 .modal-body { font-size: 1rem; color: #334155; margin-bottom: 8px; }

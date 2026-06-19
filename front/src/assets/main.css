@@ -1,27 +1,61 @@
 @import './base.css';
 
+/* ═══ 主题色 ═══ */
+:root {
+  --c-primary: #2563eb;
+  --c-primary-light: #3b82f6;
+  --c-primary-soft: #eff6ff;
+  --c-accent: #7c3aed;
+  --c-accent-soft: #f5f3ff;
+  --c-surface: rgba(255,255,255,0.72);
+  --c-surface-hover: rgba(255,255,255,0.9);
+  --c-text: #1e293b;
+  --c-text-muted: #64748b;
+  --c-border: rgba(148,163,184,0.12);
+  --radius-lg: 24px;
+  --radius-md: 16px;
+  --radius-sm: 10px;
+  --shadow-card: 0 4px 24px rgba(15,23,42,0.06), 0 1px 3px rgba(15,23,42,0.04);
+  --shadow-hover: 0 8px 30px rgba(15,23,42,0.1);
+}
+
 body {
+  min-height: 100vh;
   background:
-    radial-gradient(circle at top, rgba(191, 219, 254, 0.55), transparent 36%),
-    linear-gradient(180deg, #f8fbff 0%, #eef4fb 100%);
+    radial-gradient(ellipse 70% 50% at 50% -10%, rgba(96,165,250,0.45), transparent 45%),
+    radial-gradient(ellipse 45% 35% at 90% 15%, rgba(139,92,246,0.22), transparent 45%),
+    radial-gradient(ellipse 40% 35% at 10% 85%, rgba(59,130,246,0.3), transparent 45%),
+    radial-gradient(ellipse 35% 30% at 85% 90%, rgba(251,146,60,0.12), transparent 45%),
+    linear-gradient(170deg, #dbe6f6 0%, #e0e8f5 25%, #e8eef8 50%, #f0f4fb 100%);
+  background-attachment: fixed;
+  color: var(--c-text);
+  font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 顶部装饰线 */
+body::before {
+  content: '';
+  position: fixed; top: 0; left: 0; right: 0; height: 3px; z-index: 999;
+  background: linear-gradient(90deg, var(--c-primary), var(--c-accent), #06b6d4, var(--c-primary));
+  background-size: 200% 100%;
+  animation: shimmer-bar 4s ease-in-out infinite;
+}
+
+@keyframes shimmer-bar {
+  0%, 100% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
 }
 
 #app {
   width: 100%;
   min-height: 100vh;
-  padding: 24px;
 }
 
-@media (prefers-color-scheme: dark) {
-  body {
-    background:
-      radial-gradient(circle at top, rgba(37, 99, 235, 0.22), transparent 32%),
-      linear-gradient(180deg, #020617 0%, #0f172a 100%);
-  }
-}
+* { box-sizing: border-box; }
 
-@media (max-width: 768px) {
-  #app {
-    padding: 12px;
-  }
-}
+/* ═══ 滚动条 ═══ */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(148,163,184,0.3); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(148,163,184,0.5); }

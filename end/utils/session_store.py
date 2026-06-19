@@ -28,7 +28,8 @@ def _init():
                 session_id TEXT NOT NULL,
                 role TEXT NOT NULL,
                 content TEXT NOT NULL,
-                created_at REAL NOT NULL
+                created_at REAL NOT NULL,
+                mode TEXT DEFAULT 'chat'
             );
             CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, created_at);
 
@@ -47,16 +48,20 @@ def _init():
                 conn.execute(f"ALTER TABLE profiles ADD COLUMN {col} {col_def}")
             except Exception:
                 pass
+        try:
+            conn.execute("ALTER TABLE messages ADD COLUMN mode TEXT DEFAULT 'chat'")
+        except Exception:
+            pass
         conn.commit()
         conn.close()
 
 
-def save_message(session_id: str, role: str, content: str):
+def save_message(session_id: str, role: str, content: str, mode: str = "chat"):
     with _lock:
         conn = _connect()
         conn.execute(
-            "INSERT INTO messages (session_id, role, content, created_at) VALUES (?, ?, ?, ?)",
-            (session_id, role, content, time.time()),
+            "INSERT INTO messages (session_id, role, content, created_at, mode) VALUES (?, ?, ?, ?, ?)",
+            (session_id, role, content, time.time(), mode),
         )
         conn.commit()
         conn.close()
@@ -72,14 +77,35 @@ def get_session_history(session_id: str, limit: int = 50) -> list[dict]:
     return [{"role": r[0], "content": r[1]} for r in rows]
 
 
-def list_sessions(limit: int = 20) -> list[dict]:
+def list_sessions(limit: int = 20, mode: str = "") -> list[dict]:
     conn = _connect()
-    rows = conn.execute("""
-        SELECT session_id, COUNT(*) as msg_count, MAX(created_at) as last_active
-        FROM messages GROUP BY session_id ORDER BY last_active DESC LIMIT ?
-    """, (limit,)).fetchall()
+    if mode:
+        rows = conn.execute("""
+            SELECT
+                m.session_id,
+                COUNT(*) as msg_count,
+                MAX(m.created_at) as last_active,
+                (SELECT content FROM messages WHERE session_id = m.session_id AND role = 'user'
+                 ORDER BY created_at ASC LIMIT 1) as preview
+            FROM messages m
+            WHERE m.session_id IN (SELECT DISTINCT session_id FROM messages WHERE mode = ?)
+            GROUP BY m.session_id
+            ORDER BY last_active DESC LIMIT ?
+        """, (mode, limit)).fetchall()
+    else:
+        rows = conn.execute("""
+            SELECT
+                m.session_id,
+                COUNT(*) as msg_count,
+                MAX(m.created_at) as last_active,
+                (SELECT content FROM messages WHERE session_id = m.session_id AND role = 'user'
+                 ORDER BY created_at ASC LIMIT 1) as preview
+            FROM messages m
+            GROUP BY m.session_id
+            ORDER BY last_active DESC LIMIT ?
+        """, (limit,)).fetchall()
     conn.close()
-    return [{"session_id": r[0], "msg_count": r[1], "last_active": r[2]} for r in rows]
+    return [{"session_id": r[0], "msg_count": r[1], "last_active": r[2], "preview": r[3] or ""} for r in rows]
 
 
 def delete_session(session_id: str):

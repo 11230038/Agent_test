@@ -149,8 +149,9 @@ def chat(payload: ChatRequest):
     # 持久化对话 + 自动更新用户画像
     try:
         sid = payload.session_id or "default"
-        session_store.save_message(sid, "user", message)
-        session_store.save_message(sid, "assistant", answer)
+        mode = payload.mode or "chat"
+        session_store.save_message(sid, "user", message, mode)
+        session_store.save_message(sid, "assistant", answer, mode)
 
         # 自动画像：LLM 提取 + 关键词规则兜底
         uctx = payload.user_context or {}
@@ -588,8 +589,8 @@ def admin_prompt_write(payload: AdminPromptWriteRequest):
 # ── 会话 & 画像接口 ──
 
 @app.get("/api/sessions", response_model=ApiResponse)
-def list_sessions():
-    sessions = session_store.list_sessions()
+def list_sessions(mode: str = ""):
+    sessions = session_store.list_sessions(mode=mode)
     return success_response("ok", {"sessions": sessions})
 
 
