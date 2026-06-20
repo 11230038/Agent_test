@@ -37,9 +37,6 @@ export function useKnowledgeBase(token) {
         if (!cats.includes(c.name)) cats.push(c.name)
       })
     }
-    customCategories.value.forEach(c => {
-      if (!cats.includes(c)) cats.push(c)
-    })
     return cats
   }
 

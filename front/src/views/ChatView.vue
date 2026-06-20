@@ -1,5 +1,6 @@
 <script setup>
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 
 const sessionId = ref('sess_' + Math.random().toString(36).slice(2, 10))
 const MODE_CHAT = 'chat'
@@ -33,20 +34,41 @@ const MODE_PLACEHOLDERS = ref({
   search: '输入关键词搜索知识库，例如：滤网更换、WIFI设置',
 })
 
+const router = useRouter()
+const noModeAvailable = ref(false)
+const modesLoaded = ref(false)
+
 const loadModes = async () => {
   try {
     const resp = await fetch('/api/modes')
     const data = await resp.json()
     if (data.success && data.data.modes) {
-      availableModes.value = data.data.modes
-      for (const m of data.data.modes) {
+      const all = data.data.modes
+      // 加载配置文本
+      for (const m of all) {
         if (m.title) MODE_TITLES.value[m.id] = m.title
         if (m.greeting) MODE_GREETINGS.value[m.id] = m.greeting
         if (m.subtitle) MODE_SUBTITLES.value[m.id] = m.subtitle
         if (m.placeholder) MODE_PLACEHOLDERS.value[m.id] = m.placeholder
       }
+      // 过滤启用的模式
+      const enabled = all.filter(m => m.enabled !== false)
+      availableModes.value = enabled
+      // 无可用模式
+      if (enabled.length === 0) {
+        noModeAvailable.value = true
+        router.push('/admin')
+        return
+      }
+      noModeAvailable.value = false
+      // 当前模式被禁用则自动切换
+      if (!enabled.find(m => m.id === mode.value)) {
+        mode.value = enabled[0].id
+        messages.value = [{ role: 'assistant', content: MODE_GREETINGS.value[mode.value] }]
+      }
     }
   } catch { /* */ }
+  modesLoaded.value = true
 }
 
 const loadConfig = async () => {
@@ -143,9 +165,10 @@ const newConversation = () => {
 }
 
 const switchMode = (newMode) => {
+  if (!availableModes.value.find(m => m.id === newMode)) return
   mode.value = newMode
   searchResults.value = []
-  messages.value = [{ role: 'assistant', content: MODE_GREETINGS.value[newMode] }]
+  messages.value = [{ role: 'assistant', content: MODE_GREETINGS.value[newMode] || '你好，有什么可以帮你的？' }]
   errorMessage.value = ''
 }
 
@@ -362,7 +385,14 @@ watch(
 
 <template>
   <div>
-  <div class="chat-page">
+  <div v-if="!modesLoaded"></div>
+  <div v-else-if="noModeAvailable" class="unavailable-page">
+    <div class="unavailable-card">
+      <h1>🚫 服务暂不可用</h1>
+      <p>所有模式已被管理员禁用，请联系管理员启用后再试。</p>
+    </div>
+  </div>
+  <div v-else class="chat-page">
     <section class="chat-card">
       <header class="chat-header">
         <div class="header-left">
@@ -496,6 +526,11 @@ watch(
 </template>
 
 <style scoped>
+.unavailable-page { min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+.unavailable-card { text-align: center; padding: 48px; }
+.unavailable-card h1 { font-size: 1.6rem; font-weight: 700; color: #0f172a; margin-bottom: 12px; }
+.unavailable-card p { color: #64748b; font-size: 0.95rem; }
+
 .chat-page {
   min-height: calc(100vh - 60px);
   display: flex; align-items: center; justify-content: center;

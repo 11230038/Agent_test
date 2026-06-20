@@ -1,4 +1,5 @@
 import os
+import shutil
 import time
 import uuid
 
@@ -521,9 +522,10 @@ def _get_prompt_config() -> dict[str, str]:
 
 @app.post("/api/admin/prompts", response_model=ApiResponse)
 def admin_prompts_list(payload: AdminTokenRequest):
-    """列出所有提示词文件。"""
+    """列出所有提示词文件（内置 + 自定义模式）。"""
     _check_token(payload.token)
     prompts = []
+    # 内置提示词
     for label, path in _get_prompt_config().items():
         exists = os.path.isfile(path)
         size = os.path.getsize(path) if exists else 0
@@ -534,6 +536,18 @@ def admin_prompts_list(payload: AdminTokenRequest):
             "exists": exists,
             "size": size,
         })
+    # 自定义模式提示词
+    custom_modes = session_store.get_all_modes()
+    for m in custom_modes:
+        path = m.get("prompt_path", "")
+        if path and os.path.isfile(path):
+            prompts.append({
+                "name": f"自定义 · {m['title']}",
+                "path": path,
+                "filename": m.get("prompt_name", os.path.basename(path)),
+                "exists": True,
+                "size": os.path.getsize(path),
+            })
     return success_response("ok", {"prompts": prompts})
 
 
@@ -625,10 +639,20 @@ BUILTIN_MODES = [
 @app.get("/api/modes", response_model=ApiResponse)
 def list_modes():
     custom = session_store.get_all_modes()
-    # 内置模式排前面，custom 模式排后面
-    result = BUILTIN_MODES + [
+    # 内置模式排前面，enabled 从系统配置读取（默认启用）
+    config = session_store.get_all_config()
+    mode_enabled = config.get("mode_enabled", {})
+    builtin = []
+    for m in BUILTIN_MODES:
+        m_copy = dict(m)
+        m_copy["enabled"] = mode_enabled.get(m["id"], "1") != "0"
+        builtin.append(m_copy)
+    result = builtin + [
         {"id": m["id"], "title": m["title"], "greeting": m["greeting"],
-         "subtitle": m["subtitle"], "placeholder": m["placeholder"]}
+         "subtitle": m["subtitle"], "placeholder": m["placeholder"],
+         "prompt_path": m["prompt_path"], "prompt_name": m["prompt_name"],
+         "data_dir": m["data_dir"], "data_files": m["data_files"],
+         "enabled": m.get("enabled", True)}
         for m in custom
     ]
     return success_response("ok", {"modes": result})
@@ -675,17 +699,23 @@ async def admin_create_mode(
                 f.write(f"你是{title}的AI助手，请基于参考资料回答用户问题，只使用中文，不编造内容。")
             loggers.warning(f"LLM 生成提示词失败: {e}")
 
-    # 保存数据文件到 data/{mode_id}/
+    # 保存数据文件到 data/{mode_id}/ 并索引到向量库
     data_dir = os.path.join(_get_data_dir(), mode_id)
     os.makedirs(data_dir, exist_ok=True)
     uploaded_files = []
     for df in data_files:
-        if df.filename:
+        if df.filename and _allowed_ext(df.filename):
             fp = os.path.join(data_dir, df.filename)
             dc = await df.read()
             with open(fp, "wb") as f:
                 f.write(dc)
             uploaded_files.append(df.filename)
+            # 索引到向量库（分类 = 模式标题）
+            try:
+                rag = get_rag_service()
+                rag.vector_store._load_single_file(os.path.abspath(fp), title)
+            except Exception as e:
+                loggers.warning(f"索引数据文件失败 {df.filename}: {e}")
 
     # LLM 自动生成 greeting / subtitle / placeholder
     greeting, subtitle, placeholder = "", "", ""
@@ -725,12 +755,51 @@ async def admin_create_mode(
     })
 
 
+@app.post("/api/admin/mode/toggle/{mode_id}", response_model=ApiResponse)
+def admin_toggle_mode(mode_id: str, token: str = ""):
+    _check_token(token)
+    # 内置模式走 system_config
+    if mode_id in ("chat", "chat_only", "search"):
+        config = session_store.get_all_config()
+        mode_enabled = config.get("mode_enabled", {})
+        current = mode_enabled.get(mode_id, "1")
+        new_val = "0" if current != "0" else "1"
+        session_store.set_config("mode_enabled", mode_id, new_val)
+        enabled = new_val != "0"
+        state = "启用" if enabled else "禁用"
+        loggers.info(f"管理端{state}内置模式: {mode_id}")
+        return success_response(f"已{state}", {"id": mode_id, "enabled": enabled})
+    # 自定义模式走 custom_modes 表
+    result = session_store.toggle_mode(mode_id)
+    if not result:
+        raise HTTPException(status_code=400, detail="模式不存在")
+    state = "启用" if result["enabled"] else "禁用"
+    loggers.info(f"管理端{state}模式: {mode_id}")
+    return success_response(f"已{state}", {"id": mode_id, "enabled": result["enabled"]})
+
+
 @app.delete("/api/admin/mode/{mode_id}", response_model=ApiResponse)
 def admin_delete_mode(mode_id: str, token: str = ""):
     _check_token(token)
-    ok = session_store.delete_mode(mode_id)
-    if not ok:
+    info = session_store.delete_mode(mode_id)
+    if not info:
         raise HTTPException(status_code=400, detail="无法删除内置模式或模式不存在")
+    # 删除提示词文件
+    prompt_path = info.get("prompt_path", "")
+    if prompt_path and os.path.isfile(prompt_path):
+        try:
+            os.remove(prompt_path)
+            loggers.info(f"已删除提示词文件: {prompt_path}")
+        except Exception as e:
+            loggers.warning(f"删除提示词文件失败: {e}")
+    # 删除数据文件目录
+    data_dir = info.get("data_dir", "")
+    if data_dir and os.path.isdir(data_dir):
+        try:
+            shutil.rmtree(data_dir)
+            loggers.info(f"已删除数据目录: {data_dir}")
+        except Exception as e:
+            loggers.warning(f"删除数据目录失败: {e}")
     loggers.info(f"管理端删除模式: {mode_id}")
     return success_response("模式已删除")
 

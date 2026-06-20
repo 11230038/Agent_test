@@ -1,5 +1,6 @@
 """会话持久化存储（SQLite）：对话历史 + 用户画像。"""
 
+import os
 import sqlite3
 import json
 import threading
@@ -379,9 +380,19 @@ def _init_modes():
                 placeholder TEXT DEFAULT '',
                 prompt_path TEXT DEFAULT '',
                 data_dir TEXT DEFAULT '',
+                enabled INTEGER DEFAULT 1,
                 created_at REAL NOT NULL
             );
         """)
+        # 兼容旧表：添加 enabled 列
+        try:
+            conn.execute("ALTER TABLE custom_modes ADD COLUMN enabled INTEGER DEFAULT 1")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE custom_modes ADD COLUMN prompt_name TEXT DEFAULT ''")
+        except Exception:
+            pass
         conn.commit()
         conn.close()
 
@@ -390,14 +401,24 @@ def get_all_modes() -> list[dict]:
     _init_modes()
     conn = _connect()
     rows = conn.execute(
-        "SELECT id, title, greeting, subtitle, placeholder, prompt_path, data_dir FROM custom_modes ORDER BY created_at"
+        "SELECT id, title, greeting, subtitle, placeholder, prompt_path, data_dir, enabled FROM custom_modes ORDER BY created_at"
     ).fetchall()
     conn.close()
-    return [
-        {"id": r[0], "title": r[1], "greeting": r[2], "subtitle": r[3],
-         "placeholder": r[4], "prompt_path": r[5], "data_dir": r[6]}
-        for r in rows
-    ]
+    result = []
+    for r in rows:
+        data_dir = r[6]
+        data_files = []
+        if data_dir and os.path.isdir(data_dir):
+            data_files = [f for f in os.listdir(data_dir) if os.path.isfile(os.path.join(data_dir, f))]
+        prompt_path = r[5]
+        prompt_name = os.path.basename(prompt_path) if prompt_path else ""
+        result.append({
+            "id": r[0], "title": r[1], "greeting": r[2], "subtitle": r[3],
+            "placeholder": r[4], "prompt_path": prompt_path, "prompt_name": prompt_name,
+            "enabled": bool(r[7]) if len(r) > 7 else True,
+            "data_dir": data_dir, "data_files": data_files,
+        })
+    return result
 
 
 def get_mode(mode_id: str) -> dict | None:
@@ -426,18 +447,40 @@ def create_mode(mode_id: str, title: str, greeting: str, subtitle: str, placehol
         conn.close()
 
 
-def delete_mode(mode_id: str) -> bool:
+def delete_mode(mode_id: str) -> dict | None:
+    """删除自定义模式，返回被删除模式的信息（含文件路径）用于清理磁盘。"""
     _init_modes()
-    # 不能删除内置模式
     if mode_id in ("chat", "chat_only", "search"):
-        return False
+        return None
+    # 先获取文件路径
+    conn = _connect()
+    row = conn.execute("SELECT prompt_path, data_dir FROM custom_modes WHERE id = ?", (mode_id,)).fetchone()
+    if not row:
+        conn.close()
+        return None
+    info = {"prompt_path": row[0], "data_dir": row[1]}
+    # 删除 DB 记录
+    with _lock:
+        conn.execute("DELETE FROM custom_modes WHERE id = ?", (mode_id,))
+        conn.commit()
+    conn.close()
+    return info
+
+
+def toggle_mode(mode_id: str) -> dict | None:
+    """切换自定义模式的启用/禁用状态，返回新状态。"""
+    _init_modes()
     with _lock:
         conn = _connect()
-        conn.execute("DELETE FROM custom_modes WHERE id = ?", (mode_id,))
-        deleted = conn.total_changes > 0
+        row = conn.execute("SELECT enabled FROM custom_modes WHERE id = ?", (mode_id,)).fetchone()
+        if not row:
+            conn.close()
+            return None
+        new_val = 0 if row[0] else 1
+        conn.execute("UPDATE custom_modes SET enabled = ? WHERE id = ?", (new_val, mode_id))
         conn.commit()
         conn.close()
-        return deleted
+    return {"id": mode_id, "enabled": bool(new_val)}
 
 
 # ── LLM 画像提取 ──
