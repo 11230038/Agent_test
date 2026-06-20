@@ -57,6 +57,7 @@ const loadModes = async () => {
       // 无可用模式
       if (enabled.length === 0) {
         noModeAvailable.value = true
+        localStorage.setItem('all_modes_disabled', '1')
         router.push('/admin')
         return
       }

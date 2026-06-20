@@ -8,10 +8,10 @@ import { usePromptEditor } from '@/composables/usePromptEditor'
 const bannerDismissed = ref(false)
 const allModesDisabled = ref(false)
 
-const checkAllModesDisabled = () => {
-  if (allModes.value.length > 0) {
-    const enabled = allModes.value.filter(m => m.enabled !== false)
-    allModesDisabled.value = enabled.length === 0
+const checkChatRedirect = () => {
+  if (localStorage.getItem('all_modes_disabled') === '1') {
+    allModesDisabled.value = true
+    localStorage.removeItem('all_modes_disabled')
   }
 }
 
@@ -46,7 +46,7 @@ const loadAllModes = async () => {
         title: m.title || config.title?.[m.id] || m.title,
         isBuiltin: BUILTIN_IDS.includes(m.id),
       }))
-      checkAllModesDisabled()
+      checkChatRedirect()
     }
   } catch { /* */ }
 }
