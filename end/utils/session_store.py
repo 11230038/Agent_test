@@ -274,6 +274,172 @@ def get_profile(user_id: str) -> dict | None:
     }
 
 
+# ── 问候语 ──
+
+DEFAULT_GREETINGS = {
+    "chat": "你好，我是扫地机器人智能客服。你可以直接问我产品功能、使用问题或清洁建议。",
+    "chat_only": "嗨～我是小扫，你的扫地机器人聊天伙伴！我们可以随便聊聊，有什么想说的吗？😊",
+    "search": "输入关键词搜索知识库，例如'滤网更换'、'WIFI设置'，我会返回匹配的参考资料。",
+}
+
+DEFAULT_TITLES = {
+    "chat": "扫地机器人智能客服",
+    "chat_only": "小扫 · 聊聊天",
+    "search": "知识库检索",
+}
+
+DEFAULT_SUBTITLES = {
+    "chat": "智能问答 · RAG + 工具",
+    "chat_only": "纯聊天模式 · 轻松对话",
+    "search": "知识库检索 · 直接搜索",
+}
+
+DEFAULT_PLACEHOLDERS = {
+    "chat": "请输入你的问题，例如：如何设置扫地机器人定时清扫？",
+    "chat_only": "随意聊聊吧，例如：今天过得怎么样？",
+    "search": "输入关键词搜索知识库，例如：滤网更换、WIFI设置",
+}
+
+_config_cache: dict[str, dict[str, str]] = {}
+_config_loaded = False
+
+
+def _init_config():
+    global _config_loaded
+    if _config_loaded:
+        return
+    with _lock:
+        conn = _connect()
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS system_config (
+                scope TEXT NOT NULL,
+                mode TEXT NOT NULL,
+                content TEXT NOT NULL,
+                PRIMARY KEY (scope, mode)
+            );
+        """)
+        defaults = [
+            ("greeting", DEFAULT_GREETINGS),
+            ("title", DEFAULT_TITLES),
+            ("subtitle", DEFAULT_SUBTITLES),
+            ("placeholder", DEFAULT_PLACEHOLDERS),
+        ]
+        for scope, mapping in defaults:
+            for mode, text in mapping.items():
+                conn.execute(
+                    "INSERT OR IGNORE INTO system_config (scope, mode, content) VALUES (?, ?, ?)",
+                    (scope, mode, text),
+                )
+        conn.commit()
+        conn.close()
+    _config_loaded = True
+
+
+def _load_config_scope(scope: str) -> dict[str, str]:
+    _init_config()
+    conn = _connect()
+    rows = conn.execute("SELECT mode, content FROM system_config WHERE scope = ?", (scope,)).fetchall()
+    conn.close()
+    return {r[0]: r[1] for r in rows}
+
+
+def get_all_config() -> dict[str, dict[str, str]]:
+    _init_config()
+    conn = _connect()
+    rows = conn.execute("SELECT scope, mode, content FROM system_config").fetchall()
+    conn.close()
+    result = {}
+    for row in rows:
+        result.setdefault(row[0], {})[row[1]] = row[2]
+    return result
+
+
+def set_config(scope: str, mode: str, content: str):
+    with _lock:
+        conn = _connect()
+        conn.execute(
+            "INSERT OR REPLACE INTO system_config (scope, mode, content) VALUES (?, ?, ?)",
+            (scope, mode, content),
+        )
+        conn.commit()
+        conn.close()
+
+
+# ── 自定义 Mode ──
+
+def _init_modes():
+    with _lock:
+        conn = _connect()
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS custom_modes (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                greeting TEXT DEFAULT '',
+                subtitle TEXT DEFAULT '',
+                placeholder TEXT DEFAULT '',
+                prompt_path TEXT DEFAULT '',
+                data_dir TEXT DEFAULT '',
+                created_at REAL NOT NULL
+            );
+        """)
+        conn.commit()
+        conn.close()
+
+
+def get_all_modes() -> list[dict]:
+    _init_modes()
+    conn = _connect()
+    rows = conn.execute(
+        "SELECT id, title, greeting, subtitle, placeholder, prompt_path, data_dir FROM custom_modes ORDER BY created_at"
+    ).fetchall()
+    conn.close()
+    return [
+        {"id": r[0], "title": r[1], "greeting": r[2], "subtitle": r[3],
+         "placeholder": r[4], "prompt_path": r[5], "data_dir": r[6]}
+        for r in rows
+    ]
+
+
+def get_mode(mode_id: str) -> dict | None:
+    _init_modes()
+    conn = _connect()
+    row = conn.execute(
+        "SELECT id, title, greeting, subtitle, placeholder, prompt_path, data_dir FROM custom_modes WHERE id = ?",
+        (mode_id,),
+    ).fetchone()
+    conn.close()
+    if not row:
+        return None
+    return {"id": row[0], "title": row[1], "greeting": row[2], "subtitle": row[3],
+            "placeholder": row[4], "prompt_path": row[5], "data_dir": row[6]}
+
+
+def create_mode(mode_id: str, title: str, greeting: str, subtitle: str, placeholder: str, prompt_path: str, data_dir: str):
+    _init_modes()
+    with _lock:
+        conn = _connect()
+        conn.execute(
+            "INSERT OR REPLACE INTO custom_modes (id, title, greeting, subtitle, placeholder, prompt_path, data_dir, created_at) VALUES (?,?,?,?,?,?,?,?)",
+            (mode_id, title, greeting, subtitle, placeholder, prompt_path, data_dir, time.time()),
+        )
+        conn.commit()
+        conn.close()
+
+
+def delete_mode(mode_id: str) -> bool:
+    _init_modes()
+    # 不能删除内置模式
+    if mode_id in ("chat", "chat_only", "search"):
+        return False
+    with _lock:
+        conn = _connect()
+        conn.execute("DELETE FROM custom_modes WHERE id = ?", (mode_id,))
+        deleted = conn.total_changes > 0
+        conn.commit()
+        conn.close()
+        return deleted
+
+
 # ── LLM 画像提取 ──
 
 EXTRACT_PROFILE_PROMPT = """从以下客服对话中提取用户信息，严格输出JSON，不要加任何解释文字：

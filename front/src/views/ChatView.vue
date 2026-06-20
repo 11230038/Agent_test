@@ -5,21 +5,70 @@ const sessionId = ref('sess_' + Math.random().toString(36).slice(2, 10))
 const MODE_CHAT = 'chat'
 const MODE_SEARCH = 'search'
 const MODE_CHAT_ONLY = 'chat_only'
-const MODES = [MODE_CHAT_ONLY, MODE_CHAT, MODE_SEARCH]
+
+const availableModes = ref([
+  { id: 'chat_only', title: '小扫 · 聊聊天' },
+  { id: 'chat', title: '扫地机器人智能客服' },
+  { id: 'search', title: '知识库检索' },
+])
 const MODE_LABELS = { chat_only: '仅聊天', chat: '智能问答', search: '知识库检索' }
-const MODE_GREETINGS = {
-  chat_only: '嗨～我是小扫，你的扫地机器人聊天伙伴！我们可以随便聊聊，有什么想说的吗？😊',
+const MODE_GREETINGS = ref({
   chat: '你好，我是扫地机器人智能客服。你可以直接问我产品功能、使用问题或清洁建议。',
+  chat_only: '嗨～我是小扫，你的扫地机器人聊天伙伴！我们可以随便聊聊，有什么想说的吗？😊',
   search: '输入关键词搜索知识库，例如"滤网更换"、"WIFI设置"，我会返回匹配的参考资料。',
-}
-const MODE_TITLES = {
-  chat_only: '小扫 · 聊聊天',
+})
+const MODE_TITLES = ref({
   chat: '扫地机器人智能客服',
+  chat_only: '小扫 · 聊聊天',
   search: '知识库检索',
+})
+const MODE_SUBTITLES = ref({
+  chat: '智能问答 · RAG + 工具',
+  chat_only: '纯聊天模式 · 轻松对话',
+  search: '知识库检索 · 直接搜索',
+})
+const MODE_PLACEHOLDERS = ref({
+  chat: '请输入你的问题，例如：如何设置扫地机器人定时清扫？',
+  chat_only: '随意聊聊吧，例如：今天过得怎么样？',
+  search: '输入关键词搜索知识库，例如：滤网更换、WIFI设置',
+})
+
+const loadModes = async () => {
+  try {
+    const resp = await fetch('/api/modes')
+    const data = await resp.json()
+    if (data.success && data.data.modes) {
+      availableModes.value = data.data.modes
+      for (const m of data.data.modes) {
+        if (m.title) MODE_TITLES.value[m.id] = m.title
+        if (m.greeting) MODE_GREETINGS.value[m.id] = m.greeting
+        if (m.subtitle) MODE_SUBTITLES.value[m.id] = m.subtitle
+        if (m.placeholder) MODE_PLACEHOLDERS.value[m.id] = m.placeholder
+      }
+    }
+  } catch { /* */ }
+}
+
+const loadConfig = async () => {
+  try {
+    const resp = await fetch('/api/config')
+    const data = await resp.json()
+    if (data.success && data.data.config) {
+      const c = data.data.config
+      if (c.greeting) Object.assign(MODE_GREETINGS.value, c.greeting)
+      if (c.title) Object.assign(MODE_TITLES.value, c.title)
+      if (c.subtitle) Object.assign(MODE_SUBTITLES.value, c.subtitle)
+      if (c.placeholder) Object.assign(MODE_PLACEHOLDERS.value, c.placeholder)
+    }
+  } catch { /* fallback */ }
+  await loadModes()
 }
 
 function renderMarkdown(text) {
+  if (!text) return ''
   let html = text
+    .replace(/([^\n])(【)/g, '$1\n$2')
+    .replace(/\*\*(.+?)\*\*/g, '$1')  // 去除 **bold** 标记
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
   // 标题标记 / 分隔线 → 换行
@@ -34,9 +83,6 @@ function renderMarkdown(text) {
     const items = match.trim().split('\n').map(l => '<li>' + l.replace(/^\- /, '') + '</li>').join('')
     return '<ul>' + items + '</ul>'
   })
-
-  // 内联：加粗
-  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
 
   // 段落：双换行分割
   const blocks = html.split(/\n\n+/)
@@ -59,7 +105,7 @@ function renderMarkdown(text) {
 const messages = ref([
   {
     role: 'assistant',
-    content: MODE_GREETINGS[MODE_CHAT],
+    content: MODE_GREETINGS.value[MODE_CHAT],
   },
 ])
 const inputValue = ref('')
@@ -78,11 +124,7 @@ const DEFAULT_USER_CONTEXT = {
   month: new Date().toISOString().slice(0, 7),
 }
 
-const placeholderText = computed(() => {
-  if (mode.value === MODE_SEARCH) return '输入关键词搜索知识库，例如：滤网更换、WIFI设置'
-  if (mode.value === MODE_CHAT_ONLY) return '随意聊聊吧，例如：今天过得怎么样？'
-  return '请输入你的问题，例如：如何设置扫地机器人定时清扫？'
-})
+const placeholderText = computed(() => MODE_PLACEHOLDERS.value[mode.value] || '')
 
 const scrollToBottom = async () => {
   await nextTick()
@@ -93,7 +135,7 @@ const scrollToBottom = async () => {
 const newConversation = () => {
   if (abortController.value) abortController.value.abort()
   sessionId.value = 'sess_' + Math.random().toString(36).slice(2, 10)
-  messages.value = [{ role: 'assistant', content: MODE_GREETINGS[mode.value] }]
+  messages.value = [{ role: 'assistant', content: MODE_GREETINGS.value[mode.value] }]
   searchResults.value = []
   errorMessage.value = ''
   loading.value = false
@@ -103,7 +145,7 @@ const newConversation = () => {
 const switchMode = (newMode) => {
   mode.value = newMode
   searchResults.value = []
-  messages.value = [{ role: 'assistant', content: MODE_GREETINGS[newMode] }]
+  messages.value = [{ role: 'assistant', content: MODE_GREETINGS.value[newMode] }]
   errorMessage.value = ''
 }
 
@@ -166,7 +208,7 @@ const exportConversation = () => {
   URL.revokeObjectURL(url)
 }
 
-onMounted(() => { loadSessions() })
+onMounted(() => { loadSessions(); loadConfig() })
 
 const sendSearch = async () => {
   const query = inputValue.value.trim()
@@ -330,13 +372,13 @@ watch(
           <div class="chat-heading">
             <h1>{{ MODE_TITLES[mode] }}</h1>
             <p class="chat-subtitle">
-              {{ mode === MODE_CHAT_ONLY ? '纯聊天模式 · 轻松对话' : mode === MODE_CHAT ? '智能问答 · RAG + 工具' : '知识库检索 · 直接搜索' }}
+              {{ MODE_SUBTITLES[mode] }}
             </p>
           </div>
         </div>
         <div class="header-right">
           <select class="mode-select" :value="mode" @change="e => switchMode(e.target.value)">
-            <option v-for="m in MODES" :key="m" :value="m">{{ m === MODE_CHAT_ONLY ? '💬 仅聊天' : m === MODE_CHAT ? '🤖 智能问答' : '🔍 知识库检索' }}</option>
+            <option v-for="m in availableModes" :key="m.id" :value="m.id">{{ m.id === 'chat_only' ? '💬 仅聊天' : m.id === 'chat' ? '🤖 智能问答' : m.id === 'search' ? '🔍 知识库检索' : '📌 ' + m.title }}</option>
           </select>
           <div class="header-actions">
             <button v-if="mode !== MODE_SEARCH" class="icon-btn" title="历史对话" @click="showSidebar = !showSidebar; loadSessions()">📋</button>

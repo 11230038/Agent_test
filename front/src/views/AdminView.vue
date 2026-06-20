@@ -3,11 +3,129 @@ import { useAdminAuth } from '@/composables/useAdminAuth'
 import { useKnowledgeBase } from '@/composables/useKnowledgeBase'
 import { useChunkEditor } from '@/composables/useChunkEditor'
 import { usePromptEditor } from '@/composables/usePromptEditor'
+import { onMounted, ref } from 'vue'
 
 const auth = useAdminAuth()
 const kb = useKnowledgeBase(auth.token)
 const chunk = useChunkEditor(auth.token, kb.structure, kb.loadStructure)
 const prompt = usePromptEditor(auth.token)
+
+// 系统配置管理
+const configScopes = [
+  { key: 'greeting', label: '问候语' },
+  { key: 'title', label: '标题' },
+  { key: 'subtitle', label: '副标题' },
+  { key: 'placeholder', label: '输入提示' },
+]
+const MODE_LABELS_MAP = { chat: '智能问答', chat_only: '仅聊天', search: '知识库检索' }
+const configData = ref({})
+const savingConfig = ref('')
+const configMsg = ref('')
+
+const loadConfig = async () => {
+  try {
+    const resp = await fetch('/api/config')
+    const data = await resp.json()
+    if (data.success) configData.value = data.data.config
+  } catch { /* */ }
+}
+
+const saveConfig = async (scope, mode) => {
+  if (savingConfig.value) return
+  savingConfig.value = scope + mode
+  configMsg.value = ''
+  try {
+    const resp = await fetch('/api/admin/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: auth.token.value, scope, mode, content: configData.value[scope][mode] }),
+    })
+    const data = await resp.json()
+    if (!resp.ok) throw new Error(data.message)
+    configMsg.value = '✅ 已保存'
+  } catch (e) {
+    configMsg.value = '❌ ' + (e.message || '失败')
+  } finally {
+    savingConfig.value = ''
+  }
+}
+
+// ── 自定义模式 ──
+const newModeTitle = ref('')
+const newModePrompt = ref(null)
+const newModeDataFiles = ref([])
+const creatingMode = ref(false)
+const modeMsg = ref('')
+const customModes = ref([])
+const deletingMode = ref('')
+
+const loadCustomModes = async () => {
+  try {
+    const resp = await fetch('/api/modes')
+    const data = await resp.json()
+    if (data.success) {
+      customModes.value = data.data.modes.filter(m => !['chat','chat_only','search'].includes(m.id))
+    }
+  } catch { /* */ }
+}
+
+const deleteMode = async (modeId) => {
+  if (deletingMode.value) return
+  deletingMode.value = modeId
+  try {
+    const resp = await fetch(`/api/admin/mode/${modeId}?token=${auth.token.value}`, { method: 'DELETE' })
+    const data = await resp.json()
+    if (!resp.ok) throw new Error(data.message)
+    modeMsg.value = '✅ 已删除'
+    await loadCustomModes()
+    await loadConfig()
+  } catch (e) {
+    modeMsg.value = '❌ ' + (e.message || '删除失败')
+  } finally {
+    deletingMode.value = ''
+  }
+}
+
+const createMode = async () => {
+  const title = newModeTitle.value.trim()
+  if (!title || creatingMode.value) return
+  // 提示词可选，未上传时 LLM 自动生成
+  creatingMode.value = true
+  modeMsg.value = ''
+  const form = new FormData()
+  form.append('token', auth.token.value)
+  form.append('title', title)
+  if (newModePrompt.value) form.append('prompt_file', newModePrompt.value)
+  for (const f of newModeDataFiles.value) form.append('data_files', f)
+  try {
+    const resp = await fetch('/api/admin/mode/create', { method: 'POST', body: form })
+    const data = await resp.json()
+    if (!resp.ok) throw new Error(data.message)
+    modeMsg.value = '✅ 模式已创建: ' + data.data.id
+    newModeTitle.value = ''
+    newModePrompt.value = null
+    newModeDataFiles.value = []
+    document.getElementById('mode-prompt-input').value = ''
+    document.getElementById('mode-data-input').value = ''
+    await loadConfig()
+    await loadCustomModes()
+  } catch (e) {
+    modeMsg.value = '❌ ' + (e.message || '创建失败')
+  } finally {
+    creatingMode.value = false
+  }
+}
+
+const creatingMsg = ref('')
+
+const wrappedCreateMode = async () => {
+  if (!newModeTitle.value.trim()) { modeMsg.value = '❌ 请输入标题'; return }
+  creatingMsg.value = '正在创建模式，请稍候...'
+  await createMode()
+  creatingMsg.value = ''
+}
+
+onMounted(() => { loadConfig(); loadCustomModes() })
 
 // 登录成功后加载数据
 const unlock = async () => {
@@ -15,6 +133,7 @@ const unlock = async () => {
   if (auth.authed.value) {
     await kb.loadStructure()
     await prompt.loadPrompts()
+    await loadConfig()
   }
 }
 const handleKeydown = (e) => { if (e.key === 'Enter') unlock() }
@@ -40,14 +159,14 @@ const handleKeydown = (e) => { if (e.key === 'Enter') unlock() }
     <section v-else class="structure-panel">
       <header class="panel-header">
         <h1>📚 知识库内容结构</h1>
-        <p class="panel-sub">集合：<strong>{{ kb.structure.value.collection_name }}</strong></p>
+        <p class="panel-sub">集合：<strong>{{ kb.structure.value?.collection_name || '加载中...' }}</strong></p>
       </header>
 
       <!-- 概览 -->
       <div class="overview-cards">
-        <div class="overview-card"><span class="ov-number">{{ kb.structure.value.chunk_count }}</span><span class="ov-label">总 Chunk</span></div>
-        <div class="overview-card"><span class="ov-number">{{ kb.structure.value.category_count }}</span><span class="ov-label">分类数</span></div>
-        <div class="overview-card"><span class="ov-number">{{ kb.structure.value.tracked_file_count }}</span><span class="ov-label">已追踪文件</span></div>
+        <div class="overview-card"><span class="ov-number">{{ kb.structure.value?.chunk_count ?? '-' }}</span><span class="ov-label">总 Chunk</span></div>
+        <div class="overview-card"><span class="ov-number">{{ kb.structure.value?.category_count ?? '-' }}</span><span class="ov-label">分类数</span></div>
+        <div class="overview-card"><span class="ov-number">{{ kb.structure.value?.tracked_file_count ?? '-' }}</span><span class="ov-label">已追踪文件</span></div>
         <div class="overview-card overview-card--action" @click="kb.loadStructure()">
           <span class="ov-number">🔄</span><span class="ov-label">刷新数据</span>
         </div>
@@ -89,6 +208,56 @@ const handleKeydown = (e) => { if (e.key === 'Enter') unlock() }
         <p v-if="prompt.promptMsg.value && !prompt.editingPrompt.value" class="action-msg" :class="{ 'msg-error': prompt.promptMsg.value.startsWith('❌') }">{{ prompt.promptMsg.value }}</p>
       </div>
 
+      <!-- ═══ 系统配置 ═══ -->
+      <div class="config-card">
+        <h2>⚙️ 系统配置</h2>
+        <div v-for="scope in configScopes" :key="scope.key" class="config-scope">
+          <h3>{{ scope.label }}</h3>
+          <div v-for="mode in ['chat','chat_only','search']" :key="mode" class="config-row">
+            <span class="config-mode">{{ MODE_LABELS_MAP[mode] }}</span>
+            <input
+              v-model="configData[scope.key][mode]"
+              class="config-input"
+              :disabled="savingConfig === scope.key + mode"
+            />
+            <button
+              class="action-btn action-btn--upload"
+              :disabled="savingConfig === scope.key + mode"
+              @click="saveConfig(scope.key, mode)"
+            >{{ savingConfig === scope.key + mode ? '...' : '保存' }}</button>
+          </div>
+        </div>
+        <p v-if="configMsg" class="action-msg" :class="{ 'msg-error': configMsg.startsWith('❌') }">{{ configMsg }}</p>
+      </div>
+
+      <!-- ═══ 新建模式 ═══ -->
+      <div class="mode-create-card">
+        <h2>➕ 新建模式</h2>
+        <div class="mode-create-row">
+          <input v-model="newModeTitle" class="mode-title-input" placeholder="模式标题（必填）" :disabled="creatingMode" />
+          <div class="mode-file-group">
+            <label class="file-label">提示词(可选)：</label>
+            <input id="mode-prompt-input" type="file" accept=".txt" @change="e => newModePrompt = e.target.files[0]" :disabled="creatingMode" />
+          </div>
+          <div class="mode-file-group">
+            <label class="file-label">数据文件：</label>
+            <input id="mode-data-input" type="file" accept=".pdf,.txt" multiple @change="e => newModeDataFiles = [...e.target.files]" :disabled="creatingMode" />
+          </div>
+          <button class="action-btn action-btn--upload" :disabled="creatingMode" @click="wrappedCreateMode">
+            {{ creatingMode ? '创建中...' : '创建' }}
+          </button>
+        </div>
+        <p class="mode-hint">只填标题即可创建，提示词和数据文件可选。所有文本由 LLM 自动生成。</p>
+        <p v-if="modeMsg" class="action-msg" :class="{ 'msg-error': modeMsg.startsWith('❌') }">{{ modeMsg }}</p>
+        <div v-if="customModes.length > 0" class="mode-list">
+          <div v-for="m in customModes" :key="m.id" class="mode-item">
+            <span class="mode-item-title">📌 {{ m.title }}</span>
+            <span class="mode-item-id">{{ m.id }}</span>
+            <button class="mini-btn mini-btn--del" :disabled="deletingMode === m.id" @click="deleteMode(m.id)">🗑️</button>
+          </div>
+        </div>
+      </div>
+
       <!-- ═══ Chunk 检索栏 ═══ -->
       <div class="search-bar">
         <span class="search-icon">🔍</span>
@@ -115,11 +284,11 @@ const handleKeydown = (e) => { if (e.key === 'Enter') unlock() }
 
       <!-- ═══ 分类列表 ═══ -->
       <div v-if="!chunk.debouncedSearch.value">
-        <div v-if="kb.structure.value.chunk_count === 0" class="empty-state">
+        <div v-if="!kb.structure.value || kb.structure.value.chunk_count === 0" class="empty-state">
           <p>知识库为空，请上传文档。</p>
         </div>
 
-        <div v-for="cat in kb.structure.value.categories" :key="cat.name" class="category-card">
+        <div v-for="cat in (kb.structure.value?.categories || [])" :key="cat.name" class="category-card">
           <div class="category-header" @click="kb.toggleCategory(cat.name)">
             <span class="cat-toggle">{{ kb.expandedCategories.value[cat.name] ? '▼' : '▶' }}</span>
             <span class="cat-name">{{ cat.name }}</span>
@@ -227,6 +396,17 @@ const handleKeydown = (e) => { if (e.key === 'Enter') unlock() }
       </div>
     </Teleport>
 
+    <!-- ═══ 创建模式加载弹窗 ═══ -->
+    <Teleport to="body">
+      <div v-if="creatingMsg" class="modal-overlay">
+        <div class="modal-card">
+          <h2>⏳ 创建中</h2>
+          <p class="modal-body">{{ creatingMsg }}</p>
+          <p class="modal-warn">正在自动生成提示词和模式文本，请勿关闭页面</p>
+        </div>
+      </div>
+    </Teleport>
+
     <!-- ═══ 删除确认弹窗 ═══ -->
     <Teleport to="body">
       <div v-if="kb.deleteTarget.value" class="modal-overlay" @click.self="kb.cancelDelete()">
@@ -297,6 +477,40 @@ const handleKeydown = (e) => { if (e.key === 'Enter') unlock() }
 .prompt-missing { font-size: 0.74rem; color: #dc2626; margin-left: auto; font-weight: 600; }
 .prompt-edit-textarea { width: 100%; padding: 14px; border: 1px solid rgba(148, 163, 184, 0.3); border-radius: 12px; font: inherit; font-size: 0.86rem; line-height: 1.7; resize: vertical; outline: none; color: #0f172a; font-family: 'Consolas', 'Courier New', monospace; }
 .prompt-edit-textarea:focus { border-color: rgba(37, 99, 235, 0.5); box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.08); }
+
+/* ── 系统配置 ── */
+.config-card { margin-bottom: 20px; padding: 20px; border: 1px solid rgba(148,163,184,0.2); border-radius: 16px; background: rgba(255,255,255,0.5); box-shadow: 0 4px 12px rgba(15,23,42,0.03); }
+.config-card h2 { font-size: 1.05rem; font-weight: 700; color: #0f172a; margin-bottom: 14px; }
+.config-scope { margin-bottom: 14px; }
+.config-scope h3 { font-size: 0.88rem; font-weight: 700; color: #475569; margin-bottom: 8px; }
+.config-row { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+.config-mode { min-width: 70px; font-size: 0.8rem; font-weight: 600; color: #94a3b8; }
+.config-input {
+  flex: 1; padding: 8px 12px;
+  border: 1px solid rgba(148,163,184,0.25); border-radius: 10px;
+  font: inherit; font-size: 0.84rem; outline: none; color: #0f172a;
+  background: rgba(255,255,255,0.5);
+}
+.config-input:focus { border-color: rgba(37,99,235,0.4); box-shadow: 0 0 0 3px rgba(37,99,235,0.06); }
+
+/* ── 新建模式 ── */
+.mode-create-card { margin-bottom: 20px; padding: 20px; border: 1px dashed rgba(37,99,235,0.25); border-radius: 16px; background: rgba(239,246,255,0.5); }
+.mode-create-card h2 { font-size: 1.05rem; font-weight: 700; color: #0f172a; margin-bottom: 12px; }
+.mode-create-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+.mode-title-input {
+  padding: 8px 12px; border: 1px solid rgba(148,163,184,0.25); border-radius: 10px;
+  font: inherit; font-size: 0.86rem; outline: none; width: 160px;
+  background: rgba(255,255,255,0.5);
+}
+.mode-title-input:focus { border-color: rgba(37,99,235,0.4); }
+.mode-file-group { display: flex; align-items: center; gap: 4px; font-size: 0.82rem; }
+.file-label { color: #64748b; font-weight: 600; white-space: nowrap; }
+.mode-file-group input[type="file"] { font-size: 0.78rem; max-width: 140px; }
+.mode-hint { font-size: 0.76rem; color: #94a3b8; }
+.mode-list { margin-top: 10px; display: flex; flex-direction: column; gap: 4px; }
+.mode-item { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-radius: 10px; background: rgba(255,255,255,0.5); }
+.mode-item-title { font-weight: 600; color: #1e293b; font-size: 0.86rem; }
+.mode-item-id { font-size: 0.76rem; color: #94a3b8; font-family: monospace; flex: 1; }
 
 /* ── 检索栏 ── */
 .search-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 20px; padding: 12px 16px; border: 1px solid rgba(148, 163, 184, 0.2); border-radius: 14px; background: #fff; }

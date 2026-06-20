@@ -586,6 +586,155 @@ def admin_prompt_write(payload: AdminPromptWriteRequest):
     return success_response("提示词已保存", {"filename": os.path.basename(path), "char_count": len(payload.content)})
 
 
+# ── 系统配置接口 ──
+
+@app.get("/api/config", response_model=ApiResponse)
+def get_config():
+    config = session_store.get_all_config()
+    return success_response("ok", {"config": config})
+
+
+class ConfigUpdateRequest(BaseModel):
+    token: str
+    scope: str
+    mode: str
+    content: str
+
+
+@app.post("/api/admin/config", response_model=ApiResponse)
+def admin_set_config(payload: ConfigUpdateRequest):
+    _check_token(payload.token)
+    scope = payload.scope.strip()
+    mode = payload.mode.strip()
+    if not scope or not mode:
+        raise HTTPException(status_code=400, detail="scope 和 mode 不能为空")
+    session_store.set_config(scope, mode, payload.content)
+    loggers.info(f"管理端更新配置: {scope}/{mode}")
+    return success_response("配置已更新", {"scope": scope, "mode": mode})
+
+
+# ── 自定义 Mode 接口 ──
+
+BUILTIN_MODES = [
+    {"id": "chat", "title": "扫地机器人智能客服", "greeting": "", "subtitle": "", "placeholder": ""},
+    {"id": "chat_only", "title": "小扫 · 聊聊天", "greeting": "", "subtitle": "", "placeholder": ""},
+    {"id": "search", "title": "知识库检索", "greeting": "", "subtitle": "", "placeholder": ""},
+]
+
+
+@app.get("/api/modes", response_model=ApiResponse)
+def list_modes():
+    custom = session_store.get_all_modes()
+    # 内置模式排前面，custom 模式排后面
+    result = BUILTIN_MODES + [
+        {"id": m["id"], "title": m["title"], "greeting": m["greeting"],
+         "subtitle": m["subtitle"], "placeholder": m["placeholder"]}
+        for m in custom
+    ]
+    return success_response("ok", {"modes": result})
+
+
+@app.post("/api/admin/mode/create")
+async def admin_create_mode(
+    token: str = Form(...),
+    title: str = Form(...),
+    prompt_file: UploadFile | None = File(default=None),
+    data_files: list[UploadFile] = File(default=[]),
+):
+    _check_token(token)
+    title = title.strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="标题不能为空")
+    # 生成 mode_id
+    import re
+    mode_id = re.sub(r'[^a-zA-Z0-9_一-鿿]', '_', title)[:20]
+
+    # 保存提示词文件到 prompts/（LLM 自动生成兜底）
+    prompts_dir = os.path.join(os.path.dirname(__file__), "prompts")
+    os.makedirs(prompts_dir, exist_ok=True)
+    prompt_path = os.path.join(prompts_dir, f"{mode_id}_prompt.txt")
+
+    if prompt_file and prompt_file.filename:
+        content = await prompt_file.read()
+        with open(prompt_path, "wb") as f:
+            f.write(content)
+    else:
+        # LLM 自动生成提示词
+        try:
+            from model.factor import get_chat_model
+            llm = get_chat_model()
+            gen = llm.invoke(
+                f"请为'{title}'这个客服模式编写一段系统提示词(System Prompt)。"
+                f"该模式是扫地机器人智能客服的一个子场景，需要包含角色设定、回答约束、输出格式要求。"
+                f"200-400字，直接输出提示词内容，不要加任何解释。"
+            ).content.strip()
+            with open(prompt_path, "w", encoding="utf-8") as f:
+                f.write(gen)
+        except Exception as e:
+            with open(prompt_path, "w", encoding="utf-8") as f:
+                f.write(f"你是{title}的AI助手，请基于参考资料回答用户问题，只使用中文，不编造内容。")
+            loggers.warning(f"LLM 生成提示词失败: {e}")
+
+    # 保存数据文件到 data/{mode_id}/
+    data_dir = os.path.join(_get_data_dir(), mode_id)
+    os.makedirs(data_dir, exist_ok=True)
+    uploaded_files = []
+    for df in data_files:
+        if df.filename:
+            fp = os.path.join(data_dir, df.filename)
+            dc = await df.read()
+            with open(fp, "wb") as f:
+                f.write(dc)
+            uploaded_files.append(df.filename)
+
+    # LLM 自动生成 greeting / subtitle / placeholder
+    greeting, subtitle, placeholder = "", "", ""
+    try:
+        from model.factor import get_chat_model
+        llm = get_chat_model()
+        gen_prompt = (
+            f"你是一个扫地机器人客服系统。一个新的客服模式'{title}'即将上线。"
+            f"请为这个模式生成以下内容，严格用JSON格式输出：\n"
+            f'{{"greeting":"首条问候语，欢迎用户，20字以内",'
+            f'"subtitle":"一行模式描述，15字以内",'
+            f'"placeholder":"输入框提示文字，20字以内"}}'
+        )
+        raw = llm.invoke(gen_prompt).content.strip()
+        if raw.startswith("```"): raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0]
+        gen = __import__('json').loads(raw)
+        greeting = gen.get("greeting", "")
+        subtitle = gen.get("subtitle", "")
+        placeholder = gen.get("placeholder", "")
+    except Exception as e:
+        loggers.warning(f"LLM 生成模式文本失败: {e}")
+        greeting = f"你好，我是{title}客服助手"
+        subtitle = f"{title} · 智能服务"
+        placeholder = "请输入你的问题..."
+
+    # 存入 DB
+    session_store.create_mode(
+        mode_id, title, greeting, subtitle, placeholder,
+        prompt_path, data_dir,
+    )
+
+    loggers.info(f"管理端创建新模式: {mode_id} 标题: {title}")
+    return success_response("模式已创建", {
+        "id": mode_id, "title": title,
+        "greeting": greeting, "subtitle": subtitle, "placeholder": placeholder,
+        "data_files": uploaded_files,
+    })
+
+
+@app.delete("/api/admin/mode/{mode_id}", response_model=ApiResponse)
+def admin_delete_mode(mode_id: str, token: str = ""):
+    _check_token(token)
+    ok = session_store.delete_mode(mode_id)
+    if not ok:
+        raise HTTPException(status_code=400, detail="无法删除内置模式或模式不存在")
+    loggers.info(f"管理端删除模式: {mode_id}")
+    return success_response("模式已删除")
+
+
 # ── 会话 & 画像接口 ──
 
 @app.get("/api/sessions", response_model=ApiResponse)

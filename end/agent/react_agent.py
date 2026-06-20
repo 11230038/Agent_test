@@ -54,8 +54,51 @@ class ReactAgent:
                 tools=[],
                 middleware=[log_before_model],
             )
+
+            # 自定义模式 Agent 缓存: mode_id → agent
+            self._custom_agents: dict = {}
         except Exception as e:
             raise AgentInitializationError(f"Agent 初始化失败:{e}") from e
+
+    def _get_custom_agent(self, mode_id: str):
+        """获取或创建自定义模式的 Agent。"""
+        if mode_id in self._custom_agents:
+            return self._custom_agents[mode_id]
+
+        from utils import session_store
+        mode_info = session_store.get_mode(mode_id)
+        if not mode_info or not mode_info.get("prompt_path"):
+            loggers.warning(f"自定义模式不存在或无提示词: {mode_id}")
+            return self.agent
+
+        prompt_path = mode_info["prompt_path"]
+        try:
+            with open(prompt_path, "r", encoding="utf-8") as f:
+                custom_prompt = f.read().strip()
+        except Exception as e:
+            loggers.warning(f"无法读取自定义提示词 {prompt_path}: {e}")
+            return self.agent
+
+        if not custom_prompt:
+            loggers.warning(f"自定义提示词为空: {mode_id}")
+            return self.agent
+
+        try:
+            custom_agent = create_agent(
+                model=get_chat_model(),
+                system_prompt=custom_prompt,
+                tools=[rag_summarize, get_weather, get_user_location, get_user_id,
+                       get_user_profile, get_current_date, fetch_external_data, save_user_note,
+                       fill_context_for_report],
+                middleware=[monitor_tool, log_before_model],
+            )
+        except Exception as e:
+            loggers.error(f"创建自定义 Agent 失败 {mode_id}: {e}")
+            return self.agent
+
+        self._custom_agents[mode_id] = custom_agent
+        loggers.info(f"创建自定义模式 Agent: {mode_id} prompt_len={len(custom_prompt)}")
+        return custom_agent
 
     def _compress_history(self, history: list[dict]) -> list[dict]:
         """压缩长历史：将旧消息浓缩为摘要，保留近期消息。"""
@@ -108,7 +151,12 @@ class ReactAgent:
             # stream_mode="values" 返回完整状态，包含思考过程的中间消息
             # 只输出最终回答的增量，过滤掉思考步骤
             last_content = ""
-            agent = self.chat_agent if mode == "chat_only" else self.agent
+            if mode == "chat_only":
+                agent = self.chat_agent
+            elif mode in ("chat", "report", ""):
+                agent = self.agent
+            else:
+                agent = self._get_custom_agent(mode)
             is_report = mode == "report"
             for chunk in agent.stream(input_dict, stream_mode="values", context={"report": is_report}):
                 latest_message = chunk["messages"][-1]
