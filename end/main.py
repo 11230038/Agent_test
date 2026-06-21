@@ -1,6 +1,7 @@
 from fastapi.middleware.cors import CORSMiddleware
 
 from api import ApiResponse, app, success_response
+from utils.config_handler import api_conf
 
 
 if not any(middleware.cls is CORSMiddleware for middleware in app.user_middleware):
@@ -21,4 +22,7 @@ def root():
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True, timeout_keep_alive=300)
+    server_cfg = api_conf.get("server", {})
+    workers = server_cfg.get("workers", 1)
+    uvicorn.run("main:app", host="0.0.0.0", port=8000,
+                workers=workers, timeout_keep_alive=300)

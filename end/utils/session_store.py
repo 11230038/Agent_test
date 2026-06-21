@@ -1,136 +1,160 @@
-"""会话持久化存储（SQLite）：对话历史 + 用户画像。"""
+"""会话持久化存储（MySQL）：对话历史 + 用户画像。"""
 
 import os
-import sqlite3
 import json
-import threading
 import time
-from pathlib import Path
+import pymysql
+from utils.config_handler import api_conf
+from utils.logger_handler import loggers
 
-DB_DIR = Path(__file__).resolve().parent.parent / "data" / "sessions"
-DB_PATH = DB_DIR / "store.db"
-
-_lock = threading.Lock()
+_DB = None
 
 
-def _connect() -> sqlite3.Connection:
-    DB_DIR.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(DB_PATH))
-    conn.execute("PRAGMA journal_mode=WAL")
-    return conn
+def _get_db():
+    global _DB
+    if _DB is None:
+        cfg = api_conf.get("mysql", {})
+        _DB = {
+            "host": cfg.get("host", "127.0.0.1"),
+            "port": cfg.get("port", 3306),
+            "user": cfg.get("user", "root"),
+            "password": cfg.get("password", "root"),
+            "database": cfg.get("database", "robot_agent"),
+            "charset": "utf8mb4",
+            "auth_plugin_map": {"mysql_native_password": None, "caching_sha2_password": None},
+        }
+    return _DB
+
+
+def _connect():
+    db = _get_db()
+    try:
+        conn = pymysql.connect(**db)
+        loggers.debug(f"MySQL 连接成功: {db['host']}:{db['port']}/{db['database']}")
+        return conn
+    except Exception as e:
+        loggers.error(f"MySQL 连接失败: {db['host']}:{db['port']}/{db['database']} - {e}")
+        raise
 
 
 def _init():
-    with _lock:
-        conn = _connect()
-        conn.executescript("""
-            CREATE TABLE IF NOT EXISTS messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id TEXT NOT NULL,
-                role TEXT NOT NULL,
-                content TEXT NOT NULL,
-                created_at REAL NOT NULL,
-                mode TEXT DEFAULT 'chat'
-            );
-            CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, created_at);
-
-            CREATE TABLE IF NOT EXISTS profiles (
-                user_id TEXT PRIMARY KEY,
-                city TEXT DEFAULT '',
-                gender TEXT DEFAULT '',
-                age INTEGER DEFAULT 0,
-                preferences TEXT DEFAULT '{}',
-                updated_at REAL NOT NULL
-            );
-        """)
-        # 兼容旧表结构
-        for col, col_def in [("gender", "TEXT DEFAULT ''"), ("age", "INTEGER DEFAULT 0")]:
-            try:
-                conn.execute(f"ALTER TABLE profiles ADD COLUMN {col} {col_def}")
-            except Exception:
-                pass
-        try:
-            conn.execute("ALTER TABLE messages ADD COLUMN mode TEXT DEFAULT 'chat'")
-        except Exception:
-            pass
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS messages (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    session_id VARCHAR(64) NOT NULL,
+                    role VARCHAR(16) NOT NULL,
+                    content TEXT NOT NULL,
+                    created_at DOUBLE NOT NULL,
+                    mode VARCHAR(32) DEFAULT 'chat',
+                    INDEX idx_session (session_id, created_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS profiles (
+                    user_id VARCHAR(64) PRIMARY KEY,
+                    city VARCHAR(64) DEFAULT '',
+                    gender VARCHAR(8) DEFAULT '',
+                    age INT DEFAULT 0,
+                    preferences TEXT,
+                    updated_at DOUBLE NOT NULL
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """)
         conn.commit()
+        loggers.info(f"DB write: {cur.rowcount} rows affected")
+    finally:
         conn.close()
 
 
 def save_message(session_id: str, role: str, content: str, mode: str = "chat"):
-    with _lock:
-        conn = _connect()
-        conn.execute(
-            "INSERT INTO messages (session_id, role, content, created_at, mode) VALUES (?, ?, ?, ?, ?)",
-            (session_id, role, content, time.time(), mode),
-        )
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO messages (session_id, role, content, created_at, mode) VALUES (%s, %s, %s, %s, %s)",
+                (session_id, role, content, time.time(), mode),
+            )
         conn.commit()
+        loggers.debug(f"DB INSERT messages: {session_id} {role} len={len(content)} mode={mode}")
+    finally:
         conn.close()
 
 
 def get_session_history(session_id: str, limit: int = 50) -> list[dict]:
     conn = _connect()
-    rows = conn.execute(
-        "SELECT role, content FROM messages WHERE session_id = ? ORDER BY created_at ASC LIMIT ?",
-        (session_id, limit),
-    ).fetchall()
-    conn.close()
-    return [{"role": r[0], "content": r[1]} for r in rows]
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT role, content FROM messages WHERE session_id = %s ORDER BY created_at ASC LIMIT %s",
+                (session_id, limit),
+            )
+            rows = cur.fetchall()
+        return [{"role": r[0], "content": r[1]} for r in rows]
+    finally:
+        conn.close()
 
 
 def list_sessions(limit: int = 20, mode: str = "") -> list[dict]:
     conn = _connect()
-    if mode:
-        rows = conn.execute("""
-            SELECT
-                m.session_id,
-                COUNT(*) as msg_count,
-                MAX(m.created_at) as last_active,
-                (SELECT content FROM messages WHERE session_id = m.session_id AND role = 'user'
-                 ORDER BY created_at ASC LIMIT 1) as preview
-            FROM messages m
-            WHERE m.session_id IN (SELECT DISTINCT session_id FROM messages WHERE mode = ?)
-            GROUP BY m.session_id
-            ORDER BY last_active DESC LIMIT ?
-        """, (mode, limit)).fetchall()
-    else:
-        rows = conn.execute("""
-            SELECT
-                m.session_id,
-                COUNT(*) as msg_count,
-                MAX(m.created_at) as last_active,
-                (SELECT content FROM messages WHERE session_id = m.session_id AND role = 'user'
-                 ORDER BY created_at ASC LIMIT 1) as preview
-            FROM messages m
-            GROUP BY m.session_id
-            ORDER BY last_active DESC LIMIT ?
-        """, (limit,)).fetchall()
-    conn.close()
-    return [{"session_id": r[0], "msg_count": r[1], "last_active": r[2], "preview": r[3] or ""} for r in rows]
+    try:
+        with conn.cursor() as cur:
+            if mode:
+                cur.execute("""
+                    SELECT m.session_id, COUNT(*) as msg_count, MAX(m.created_at) as last_active,
+                        (SELECT content FROM messages WHERE session_id = m.session_id AND role = 'user'
+                         ORDER BY created_at ASC LIMIT 1) as preview
+                    FROM messages m
+                    WHERE m.session_id IN (SELECT DISTINCT session_id FROM messages WHERE mode = %s)
+                    GROUP BY m.session_id
+                    ORDER BY last_active DESC LIMIT %s
+                """, (mode, limit))
+            else:
+                cur.execute("""
+                    SELECT m.session_id, COUNT(*) as msg_count, MAX(m.created_at) as last_active,
+                        (SELECT content FROM messages WHERE session_id = m.session_id AND role = 'user'
+                         ORDER BY created_at ASC LIMIT 1) as preview
+                    FROM messages m
+                    GROUP BY m.session_id
+                    ORDER BY last_active DESC LIMIT %s
+                """, (limit,))
+            rows = cur.fetchall()
+        return [{"session_id": r[0], "msg_count": r[1], "last_active": r[2], "preview": r[3] or ""} for r in rows]
+    finally:
+        conn.close()
 
 
 def delete_session(session_id: str):
-    with _lock:
-        conn = _connect()
-        conn.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM messages WHERE session_id = %s", (session_id,))
         conn.commit()
+        loggers.info(f"DB write: {cur.rowcount} rows affected")
+    finally:
         conn.close()
 
 
 def save_profile(user_id: str, city: str = "", gender: str = "", age: int = 0, preferences: dict | None = None):
-    with _lock:
-        conn = _connect()
+    conn = _connect()
+    try:
         prefs = json.dumps(preferences or {}, ensure_ascii=False)
-        conn.execute(
-            "INSERT OR REPLACE INTO profiles (user_id, city, gender, age, preferences, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
-            (user_id, city, gender, age, prefs, time.time()),
-        )
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO profiles (user_id, city, gender, age, preferences, updated_at) "
+                "VALUES (%s, %s, %s, %s, %s, %s) "
+                "ON DUPLICATE KEY UPDATE city=VALUES(city), gender=VALUES(gender), "
+                "age=VALUES(age), preferences=VALUES(preferences), updated_at=VALUES(updated_at)",
+                (user_id, city, gender, age, prefs, time.time()),
+            )
         conn.commit()
+        loggers.info(f"DB write: {cur.rowcount} rows affected")
+    finally:
         conn.close()
 
 
 def merge_profile(user_id: str, city: str = "", gender: str = "", age: int = 0, new_prefs: dict | None = None):
-    """增量更新画像：合并偏好，不覆盖已有数据。"""
     existing = get_profile(user_id)
     if existing:
         merged_prefs = existing.get("preferences", {})
@@ -142,90 +166,85 @@ def merge_profile(user_id: str, city: str = "", gender: str = "", age: int = 0, 
         merged_city = city
         merged_gender = gender
         merged_age = age
-
     if new_prefs:
         merged_prefs.update(new_prefs)
-
     save_profile(user_id, merged_city, merged_gender, merged_age, merged_prefs)
 
 
 # ── 反馈存储 ──
 
 def _init_feedback():
-    with _lock:
-        conn = _connect()
-        conn.executescript("""
-            CREATE TABLE IF NOT EXISTS feedback (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id TEXT NOT NULL,
-                rating TEXT NOT NULL,
-                comment TEXT DEFAULT '',
-                created_at REAL NOT NULL
-            );
-        """)
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS feedback (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    session_id VARCHAR(64) NOT NULL,
+                    rating VARCHAR(16) NOT NULL,
+                    comment TEXT,
+                    created_at DOUBLE NOT NULL
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """)
         conn.commit()
+        loggers.info(f"DB write: {cur.rowcount} rows affected")
+    finally:
         conn.close()
 
 
 def save_feedback(session_id: str, rating: str, comment: str = ""):
-    with _lock:
-        conn = _connect()
-        conn.execute(
-            "INSERT INTO feedback (session_id, rating, comment, created_at) VALUES (?, ?, ?, ?)",
-            (session_id, rating, comment, time.time()),
-        )
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO feedback (session_id, rating, comment, created_at) VALUES (%s, %s, %s, %s)",
+                (session_id, rating, comment, time.time()),
+            )
         conn.commit()
+        loggers.info(f"DB write: {cur.rowcount} rows affected")
+    finally:
         conn.close()
 
 
 def get_feedback_stats() -> dict:
     conn = _connect()
-    total = conn.execute("SELECT COUNT(*) FROM feedback").fetchone()[0]
-    likes = conn.execute("SELECT COUNT(*) FROM feedback WHERE rating = 'like'").fetchone()[0]
-    dislikes = conn.execute("SELECT COUNT(*) FROM feedback WHERE rating = 'dislike'").fetchone()[0]
-    recent = conn.execute(
-        "SELECT session_id, rating, comment, created_at FROM feedback ORDER BY created_at DESC LIMIT 20"
-    ).fetchall()
-    conn.close()
-    return {
-        "total": total,
-        "likes": likes,
-        "dislikes": dislikes,
-        "recent": [
-            {"session_id": r[0], "rating": r[1], "comment": r[2], "created_at": r[3]}
-            for r in recent
-        ],
-    }
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM feedback")
+            total = cur.fetchone()[0]
+            cur.execute("SELECT COUNT(*) FROM feedback WHERE rating = 'like'")
+            likes = cur.fetchone()[0]
+            cur.execute("SELECT COUNT(*) FROM feedback WHERE rating = 'dislike'")
+            dislikes = cur.fetchone()[0]
+            cur.execute("SELECT session_id, rating, comment, created_at FROM feedback ORDER BY created_at DESC LIMIT 20")
+            recent = cur.fetchall()
+        return {
+            "total": total,
+            "likes": likes,
+            "dislikes": dislikes,
+            "recent": [{"session_id": r[0], "rating": r[1], "comment": r[2], "created_at": r[3]} for r in recent],
+        }
+    finally:
+        conn.close()
 
 
 # ── 偏好提取规则 ──
 
-# ── 性别和年龄提取 ──
-
 def extract_demographics(text: str) -> dict:
-    """从文本中提取性别和年龄。"""
     result = {}
-    # 性别
     for kw in ["我是男生", "我是男的", "男用户", "先生", "帅哥"]:
-        if kw in text:
-            result["gender"] = "男"
-            break
+        if kw in text: result["gender"] = "男"; break
     for kw in ["我是女生", "我是女的", "女用户", "女士", "美女", "小姐"]:
-        if kw in text:
-            result["gender"] = "女"
-            break
-    # 年龄
+        if kw in text: result["gender"] = "女"; break
     import re
     m = re.search(r"(\d{1,3})\s*岁", text)
     if m:
         age = int(m.group(1))
-        if 0 < age < 150:
-            result["age"] = age
+        if 0 < age < 150: result["age"] = age
     return result
 
 
 PREFERENCE_RULES = [
-    # (关键词列表, 偏好字段, 值)
     (["大户型", "大面积", "大平层", "别墅", "复式"], "house_type", "大户型"),
     (["小户型", "小面积", "公寓", "单间"], "house_type", "小户型"),
     (["有猫", "养猫", "猫咪", "有狗", "养狗", "宠物", "掉毛"], "has_pets", True),
@@ -240,247 +259,213 @@ PREFERENCE_RULES = [
 
 
 def extract_preferences(text: str) -> dict:
-    """从文本中提取用户偏好。"""
     prefs = {}
-    if not text:
-        return prefs
+    if not text: return prefs
     for keywords, field, value in PREFERENCE_RULES:
         for kw in keywords:
-            if kw in text:
-                prefs[field] = value
-                break
+            if kw in text: prefs[field] = value; break
     return prefs
 
 
 def get_profile(user_id: str) -> dict | None:
     conn = _connect()
-    row = conn.execute(
-        "SELECT city, gender, age, preferences, updated_at FROM profiles WHERE user_id = ?",
-        (user_id,)
-    ).fetchone()
-    conn.close()
-    if not row:
-        return None
     try:
-        prefs = json.loads(row[3])
-    except (json.JSONDecodeError, TypeError):
-        prefs = {}
-    return {
-        "user_id": user_id,
-        "city": row[0],
-        "gender": row[1],
-        "age": row[2],
-        "preferences": prefs,
-        "updated_at": row[4],
-    }
+        with conn.cursor() as cur:
+            cur.execute("SELECT city, gender, age, preferences, updated_at FROM profiles WHERE user_id = %s", (user_id,))
+            row = cur.fetchone()
+        if not row: return None
+        try: prefs = json.loads(row[3])
+        except (json.JSONDecodeError, TypeError): prefs = {}
+        return {"user_id": user_id, "city": row[0], "gender": row[1], "age": row[2], "preferences": prefs, "updated_at": row[4]}
+    finally:
+        conn.close()
 
 
-# ── 问候语 ──
+# ── 系统配置 ──
 
 DEFAULT_GREETINGS = {
     "chat": "你好，我是扫地机器人智能客服。你可以直接问我产品功能、使用问题或清洁建议。",
     "chat_only": "嗨～我是小扫，你的扫地机器人聊天伙伴！我们可以随便聊聊，有什么想说的吗？😊",
     "search": "输入关键词搜索知识库，例如'滤网更换'、'WIFI设置'，我会返回匹配的参考资料。",
 }
+DEFAULT_TITLES = {"chat": "扫地机器人智能客服", "chat_only": "小扫 · 聊聊天", "search": "知识库检索"}
+DEFAULT_SUBTITLES = {"chat": "智能问答 · RAG + 工具", "chat_only": "纯聊天模式 · 轻松对话", "search": "知识库检索 · 直接搜索"}
+DEFAULT_PLACEHOLDERS = {"chat": "请输入你的问题，例如：如何设置扫地机器人定时清扫？", "chat_only": "随意聊聊吧，例如：今天过得怎么样？", "search": "输入关键词搜索知识库，例如：滤网更换、WIFI设置"}
 
-DEFAULT_TITLES = {
-    "chat": "扫地机器人智能客服",
-    "chat_only": "小扫 · 聊聊天",
-    "search": "知识库检索",
-}
-
-DEFAULT_SUBTITLES = {
-    "chat": "智能问答 · RAG + 工具",
-    "chat_only": "纯聊天模式 · 轻松对话",
-    "search": "知识库检索 · 直接搜索",
-}
-
-DEFAULT_PLACEHOLDERS = {
-    "chat": "请输入你的问题，例如：如何设置扫地机器人定时清扫？",
-    "chat_only": "随意聊聊吧，例如：今天过得怎么样？",
-    "search": "输入关键词搜索知识库，例如：滤网更换、WIFI设置",
-}
-
-_config_cache: dict[str, dict[str, str]] = {}
 _config_loaded = False
 
 
 def _init_config():
     global _config_loaded
-    if _config_loaded:
-        return
-    with _lock:
-        conn = _connect()
-        conn.executescript("""
-            CREATE TABLE IF NOT EXISTS system_config (
-                scope TEXT NOT NULL,
-                mode TEXT NOT NULL,
-                content TEXT NOT NULL,
-                PRIMARY KEY (scope, mode)
-            );
-        """)
-        defaults = [
-            ("greeting", DEFAULT_GREETINGS),
-            ("title", DEFAULT_TITLES),
-            ("subtitle", DEFAULT_SUBTITLES),
-            ("placeholder", DEFAULT_PLACEHOLDERS),
-        ]
-        for scope, mapping in defaults:
-            for mode, text in mapping.items():
-                conn.execute(
-                    "INSERT OR IGNORE INTO system_config (scope, mode, content) VALUES (?, ?, ?)",
-                    (scope, mode, text),
-                )
+    if _config_loaded: return
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS system_config (
+                    scope VARCHAR(32) NOT NULL,
+                    mode VARCHAR(32) NOT NULL,
+                    content TEXT NOT NULL,
+                    PRIMARY KEY (scope, mode)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """)
+            for scope, mapping in [("greeting", DEFAULT_GREETINGS), ("title", DEFAULT_TITLES),
+                                    ("subtitle", DEFAULT_SUBTITLES), ("placeholder", DEFAULT_PLACEHOLDERS)]:
+                for mode, text in mapping.items():
+                    cur.execute(
+                        "INSERT IGNORE INTO system_config (scope, mode, content) VALUES (%s, %s, %s)",
+                        (scope, mode, text),
+                    )
         conn.commit()
+        loggers.info(f"DB write: {cur.rowcount} rows affected")
+    finally:
         conn.close()
     _config_loaded = True
-
-
-def _load_config_scope(scope: str) -> dict[str, str]:
-    _init_config()
-    conn = _connect()
-    rows = conn.execute("SELECT mode, content FROM system_config WHERE scope = ?", (scope,)).fetchall()
-    conn.close()
-    return {r[0]: r[1] for r in rows}
 
 
 def get_all_config() -> dict[str, dict[str, str]]:
     _init_config()
     conn = _connect()
-    rows = conn.execute("SELECT scope, mode, content FROM system_config").fetchall()
-    conn.close()
-    result = {}
-    for row in rows:
-        result.setdefault(row[0], {})[row[1]] = row[2]
-    return result
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT scope, mode, content FROM system_config")
+            rows = cur.fetchall()
+        result = {}
+        for row in rows: result.setdefault(row[0], {})[row[1]] = row[2]
+        return result
+    finally:
+        conn.close()
 
 
 def set_config(scope: str, mode: str, content: str):
-    with _lock:
-        conn = _connect()
-        conn.execute(
-            "INSERT OR REPLACE INTO system_config (scope, mode, content) VALUES (?, ?, ?)",
-            (scope, mode, content),
-        )
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO system_config (scope, mode, content) VALUES (%s, %s, %s) "
+                "ON DUPLICATE KEY UPDATE content=VALUES(content)",
+                (scope, mode, content),
+            )
         conn.commit()
+        loggers.info(f"DB write: {cur.rowcount} rows affected")
+    finally:
         conn.close()
 
 
 # ── 自定义 Mode ──
 
 def _init_modes():
-    with _lock:
-        conn = _connect()
-        conn.executescript("""
-            CREATE TABLE IF NOT EXISTS custom_modes (
-                id TEXT PRIMARY KEY,
-                title TEXT NOT NULL,
-                greeting TEXT DEFAULT '',
-                subtitle TEXT DEFAULT '',
-                placeholder TEXT DEFAULT '',
-                prompt_path TEXT DEFAULT '',
-                data_dir TEXT DEFAULT '',
-                enabled INTEGER DEFAULT 1,
-                created_at REAL NOT NULL
-            );
-        """)
-        # 兼容旧表：添加 enabled 列
-        try:
-            conn.execute("ALTER TABLE custom_modes ADD COLUMN enabled INTEGER DEFAULT 1")
-        except Exception:
-            pass
-        try:
-            conn.execute("ALTER TABLE custom_modes ADD COLUMN prompt_name TEXT DEFAULT ''")
-        except Exception:
-            pass
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS custom_modes (
+                    id VARCHAR(32) PRIMARY KEY,
+                    title VARCHAR(128) NOT NULL,
+                    greeting TEXT,
+                    subtitle TEXT,
+                    placeholder TEXT,
+                    prompt_path TEXT,
+                    data_dir TEXT,
+                    enabled TINYINT DEFAULT 1,
+                    created_at DOUBLE NOT NULL
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """)
         conn.commit()
+        loggers.info(f"DB write: {cur.rowcount} rows affected")
+    finally:
         conn.close()
 
 
 def get_all_modes() -> list[dict]:
     _init_modes()
     conn = _connect()
-    rows = conn.execute(
-        "SELECT id, title, greeting, subtitle, placeholder, prompt_path, data_dir, enabled FROM custom_modes ORDER BY created_at"
-    ).fetchall()
-    conn.close()
-    result = []
-    for r in rows:
-        data_dir = r[6]
-        data_files = []
-        if data_dir and os.path.isdir(data_dir):
-            data_files = [f for f in os.listdir(data_dir) if os.path.isfile(os.path.join(data_dir, f))]
-        prompt_path = r[5]
-        prompt_name = os.path.basename(prompt_path) if prompt_path else ""
-        result.append({
-            "id": r[0], "title": r[1], "greeting": r[2], "subtitle": r[3],
-            "placeholder": r[4], "prompt_path": prompt_path, "prompt_name": prompt_name,
-            "enabled": bool(r[7]) if len(r) > 7 else True,
-            "data_dir": data_dir, "data_files": data_files,
-        })
-    return result
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, title, greeting, subtitle, placeholder, prompt_path, data_dir, enabled FROM custom_modes ORDER BY created_at")
+            rows = cur.fetchall()
+        result = []
+        for r in rows:
+            data_dir = r[6]
+            data_files = []
+            if data_dir and os.path.isdir(data_dir):
+                data_files = [f for f in os.listdir(data_dir) if os.path.isfile(os.path.join(data_dir, f))]
+            prompt_path = r[5]
+            prompt_name = os.path.basename(prompt_path) if prompt_path else ""
+            result.append({
+                "id": r[0], "title": r[1], "greeting": r[2], "subtitle": r[3],
+                "placeholder": r[4], "prompt_path": prompt_path, "prompt_name": prompt_name,
+                "enabled": bool(r[7]) if len(r) > 7 else True,
+                "data_dir": data_dir, "data_files": data_files,
+            })
+        return result
+    finally:
+        conn.close()
 
 
 def get_mode(mode_id: str) -> dict | None:
     _init_modes()
     conn = _connect()
-    row = conn.execute(
-        "SELECT id, title, greeting, subtitle, placeholder, prompt_path, data_dir FROM custom_modes WHERE id = ?",
-        (mode_id,),
-    ).fetchone()
-    conn.close()
-    if not row:
-        return None
-    return {"id": row[0], "title": row[1], "greeting": row[2], "subtitle": row[3],
-            "placeholder": row[4], "prompt_path": row[5], "data_dir": row[6]}
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, title, greeting, subtitle, placeholder, prompt_path, data_dir FROM custom_modes WHERE id = %s", (mode_id,))
+            row = cur.fetchone()
+        if not row: return None
+        return {"id": row[0], "title": row[1], "greeting": row[2], "subtitle": row[3],
+                "placeholder": row[4], "prompt_path": row[5], "data_dir": row[6]}
+    finally:
+        conn.close()
 
 
 def create_mode(mode_id: str, title: str, greeting: str, subtitle: str, placeholder: str, prompt_path: str, data_dir: str):
     _init_modes()
-    with _lock:
-        conn = _connect()
-        conn.execute(
-            "INSERT OR REPLACE INTO custom_modes (id, title, greeting, subtitle, placeholder, prompt_path, data_dir, created_at) VALUES (?,?,?,?,?,?,?,?)",
-            (mode_id, title, greeting, subtitle, placeholder, prompt_path, data_dir, time.time()),
-        )
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO custom_modes (id, title, greeting, subtitle, placeholder, prompt_path, data_dir, created_at) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE "
+                "title=VALUES(title), greeting=VALUES(greeting), subtitle=VALUES(subtitle), "
+                "placeholder=VALUES(placeholder), prompt_path=VALUES(prompt_path), data_dir=VALUES(data_dir)",
+                (mode_id, title, greeting, subtitle, placeholder, prompt_path, data_dir, time.time()),
+            )
         conn.commit()
+        loggers.info(f"DB write: {cur.rowcount} rows affected")
+    finally:
         conn.close()
 
 
 def delete_mode(mode_id: str) -> dict | None:
-    """删除自定义模式，返回被删除模式的信息（含文件路径）用于清理磁盘。"""
     _init_modes()
-    if mode_id in ("chat", "chat_only", "search"):
-        return None
-    # 先获取文件路径
+    if mode_id in ("chat", "chat_only", "search"): return None
     conn = _connect()
-    row = conn.execute("SELECT prompt_path, data_dir FROM custom_modes WHERE id = ?", (mode_id,)).fetchone()
-    if not row:
-        conn.close()
-        return None
-    info = {"prompt_path": row[0], "data_dir": row[1]}
-    # 删除 DB 记录
-    with _lock:
-        conn.execute("DELETE FROM custom_modes WHERE id = ?", (mode_id,))
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT prompt_path, data_dir FROM custom_modes WHERE id = %s", (mode_id,))
+            row = cur.fetchone()
+            if not row: return None
+            info = {"prompt_path": row[0], "data_dir": row[1]}
+            cur.execute("DELETE FROM custom_modes WHERE id = %s", (mode_id,))
         conn.commit()
-    conn.close()
-    return info
+        return info
+    finally:
+        conn.close()
 
 
 def toggle_mode(mode_id: str) -> dict | None:
-    """切换自定义模式的启用/禁用状态，返回新状态。"""
     _init_modes()
-    with _lock:
-        conn = _connect()
-        row = conn.execute("SELECT enabled FROM custom_modes WHERE id = ?", (mode_id,)).fetchone()
-        if not row:
-            conn.close()
-            return None
-        new_val = 0 if row[0] else 1
-        conn.execute("UPDATE custom_modes SET enabled = ? WHERE id = ?", (new_val, mode_id))
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT enabled FROM custom_modes WHERE id = %s", (mode_id,))
+            row = cur.fetchone()
+            if not row: return None
+            new_val = 0 if row[0] else 1
+            cur.execute("UPDATE custom_modes SET enabled = %s WHERE id = %s", (new_val, mode_id))
         conn.commit()
+        return {"id": mode_id, "enabled": bool(new_val)}
+    finally:
         conn.close()
-    return {"id": mode_id, "enabled": bool(new_val)}
 
 
 # ── LLM 画像提取 ──
@@ -494,20 +479,13 @@ JSON格式：{{"gender":"男/女/未知","age":数字或0,"preferences":{{"house
 
 
 def extract_profile_with_llm(dialogue: str) -> dict | None:
-    """用 LLM 从对话中提取用户画像，失败返回 None。"""
     try:
         from model.factor import get_chat_model
         model = get_chat_model()
         result = model.invoke(EXTRACT_PROFILE_PROMPT.format(dialogue=dialogue[:2000])).content
-        # 清理 LLM 输出：去掉 markdown 代码块包裹
         text = result.strip()
-        if text.startswith("```"):
-            text = text.split("\n", 1)[-1]
-            if text.endswith("```"):
-                text = text[:-3]
-            text = text.strip()
-        profile = json.loads(text)
-        return profile
+        if text.startswith("```"): text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+        return json.loads(text)
     except Exception:
         return None
 
@@ -515,3 +493,6 @@ def extract_profile_with_llm(dialogue: str) -> dict | None:
 # 模块导入时自动初始化
 _init()
 _init_feedback()
+_init_config()
+_init_modes()
+loggers.info("MySQL 存储模块初始化完成，所有表已就绪")

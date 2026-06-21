@@ -16,7 +16,23 @@ from utils import session_store
 from utils.logger_handler import loggers
 
 app = FastAPI(title="Robot Agent API")
-_agent: ReactAgent | None = None
+_agent_pool: dict[str, ReactAgent] = {}
+_agent_pool_lock = __import__('threading').Lock()
+
+
+def get_agent(session_id: str = "") -> ReactAgent:
+    """获取或创建 Agent 实例。相同 session_id 复用，空或未知 session 用默认。"""
+    sid = session_id or "default"
+    with _agent_pool_lock:
+        if sid not in _agent_pool:
+            _agent_pool[sid] = ReactAgent()
+            loggers.info(f"Agent 实例池新增: {sid} (共 {len(_agent_pool)} 个)")
+            # 限制池大小
+            if len(_agent_pool) > 100:
+                oldest = next(iter(_agent_pool))
+                del _agent_pool[oldest]
+                loggers.info(f"Agent 实例池清理: {oldest}")
+    return _agent_pool[sid]
 
 
 class ChatRequest(BaseModel):
@@ -39,13 +55,6 @@ def success_response(message: str, data: dict | None = None) -> ApiResponse:
 
 def error_response(message: str, data: dict | None = None) -> ApiResponse:
     return ApiResponse(success=False, message=message, data=data)
-
-
-def get_agent() -> ReactAgent:
-    global _agent
-    if _agent is None:
-        _agent = ReactAgent()
-    return _agent
 
 
 def _make_trace_id() -> str:
@@ -130,7 +139,7 @@ def chat(payload: ChatRequest):
     loggers.info(f"[{trace_id}] 收到聊天请求 session={payload.session_id} history_len={len(payload.history or [])}")
 
     try:
-        answer = get_agent().execute(message, history=payload.history, trace_id=trace_id, user_context=payload.user_context, mode=payload.mode)
+        answer = get_agent(payload.session_id or "").execute(message, history=payload.history, trace_id=trace_id, user_context=payload.user_context, mode=payload.mode)
     except AgentInitializationError as e:
         loggers.error(f"[{trace_id}] 模型初始化失败: {e}")
         raise HTTPException(status_code=503, detail="服务配置异常，请联系管理员") from e
@@ -182,7 +191,9 @@ def chat(payload: ChatRequest):
 
 
 @app.post("/api/chat/stream")
-def chat_stream(req: ChatRequest):
+async def chat_stream(req: ChatRequest):
+    import asyncio
+
     trace_id = _make_trace_id()
     message = req.message.strip()
     if not message:
@@ -190,35 +201,34 @@ def chat_stream(req: ChatRequest):
 
     loggers.info(f"[{trace_id}] 收到流式聊天请求 session={req.session_id} history_len={len(req.history or [])}")
 
-    def generate():
-        import queue
-        import threading
-
-        q: queue.Queue = queue.Queue()
+    async def generate():
+        q: asyncio.Queue = asyncio.Queue()
         interrupted = False
 
-        def run():
+        def run_sync():
+            """在线程中运行，通过同步 queue 桥接到 async queue。"""
             try:
-                for chunk in get_agent().execute_stream(message, history=req.history, trace_id=trace_id, user_context=req.user_context, mode=req.mode):
-                    q.put(("data", chunk))
-                q.put(("done", None))
+                for chunk in get_agent(req.session_id or "").execute_stream(message, history=req.history, trace_id=trace_id, user_context=req.user_context, mode=req.mode):
+                    q.put_nowait(("data", chunk))
+                q.put_nowait(("done", None))
             except AgentInitializationError as e:
                 loggers.error(f"[{trace_id}] 模型初始化失败: {e}")
-                q.put(("error", "服务配置异常，请联系管理员"))
+                q.put_nowait(("error", "服务配置异常，请联系管理员"))
             except AgentExecutionError as e:
                 loggers.error(f"[{trace_id}] 模型执行失败: {e}")
-                q.put(("error", "模型服务暂不可用，请稍后重试"))
+                q.put_nowait(("error", "模型服务暂不可用，请稍后重试"))
             except Exception as e:
                 loggers.error(f"[{trace_id}] 流式聊天执行失败: {e}")
-                q.put(("error", "服务器内部错误，请稍后重试"))
+                q.put_nowait(("error", "服务器内部错误，请稍后重试"))
 
-        t = threading.Thread(target=run, daemon=True)
-        t.start()
+        import concurrent.futures
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        executor.submit(run_sync)
 
         try:
             while True:
                 try:
-                    msg_type, data = q.get(timeout=4)
+                    msg_type, data = await asyncio.wait_for(q.get(), timeout=4)
                     if msg_type == "done":
                         break
                     if msg_type == "error":
@@ -228,9 +238,9 @@ def chat_stream(req: ChatRequest):
                         yield f"data: {line}\n"
                     yield "\n"
                     loggers.info(f"[{trace_id}] SSE → {repr(data[:80])}")
-                except queue.Empty:
+                except asyncio.TimeoutError:
                     yield "data: \n\n"
-        except GeneratorExit:
+        except asyncio.CancelledError:
             interrupted = True
 
         if interrupted:

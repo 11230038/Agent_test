@@ -70,48 +70,34 @@ Agent/
 
 ### 环境要求
 
-- **Python** 3.10+
-- **Node.js** 20.19+ / 22.12+
-- **依赖包**：参见 `end/` 和 `front/package.json`
+- **Python** 3.10+ / **Node.js** 20.19+ / **MySQL** 8.0+
 
 ### 1. 安装依赖
 
 ```bash
-# 后端（进入 end 目录）
 cd end
-pip install fastapi uvicorn langchain langchain-chroma langchain-community langchain-text-splitters dashscope pyyaml streamlit pyjwt
-
-# 前端
-cd front
-npm install
+pip install fastapi uvicorn langchain langchain-chroma langchain-community langchain-text-splitters dashscope pyyaml streamlit pyjwt pymysql
+cd ../front && npm install
 ```
 
-### 2. 配置 API Key
+### 2. 配置
 
-编辑 `end/config/api.yml`（或 `end/config/agent.yml`），填入 DashScope API Key。
+编辑 `end/config/api.yml`：DashScope API Key + MySQL 连接 + uvicorn workers 数。
 
-### 3. 加载知识库
+### 3. 创建 MySQL 数据库
+
+```sql
+CREATE DATABASE agent CHARACTER SET utf8mb4;
+```
+
+### 4. 加载知识库 + 启动
 
 ```bash
 cd end
 python -c "from rag.vector_store import VectorStoreService; VectorStoreService().load_document()"
+python main.py          # 后端 :8000
+cd ../front && npm run dev  # 前端 :5173
 ```
-
-`data/` 目录下的 PDF/TXT 文件会按子目录分类自动索引。
-
-### 4. 启动服务
-
-```bash
-# 终端 1 — 后端（端口 8000）
-cd end
-python main.py
-
-# 终端 2 — 前端（端口 5173 自动代理 API）
-cd front
-npm run dev
-```
-
-访问：`http://localhost:5173`
 
 ---
 
@@ -130,17 +116,18 @@ npm run dev
 └─────────────────────┬───────────────────────────────┘
                       │ HTTP / SSE (Vite Proxy)
 ┌─────────────────────┴───────────────────────────────┐
-│                 FastAPI 后端                         │
+│                 FastAPI 后端 (uvicorn workers=N)     │
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐          │
-│  │  19 API  │  │  Session │  │  Admin   │          │
+│  │  25 API  │  │  MySQL   │  │  Admin   │          │
 │  │  Routes  │  │  Store   │  │  APIs    │          │
-│  └────┬─────┘  └──────────┘  └──────────┘          │
+│  │ (asyncio)│  └──────────┘  └──────────┘          │
+│  └────┬─────┘                                       │
 │       │                                              │
 │  ┌────┴─────────────────────────────────┐          │
-│  │           ReactAgent                 │          │
+│  │      ReactAgent Pool (per-session)   │          │
 │  │  ┌─────────┐ 9 Tools ┌────────────┐ │          │
-│  │  │  Chat   │─────────│  RAG Tool  │ │          │
-│  │  │  Agent  │         │  Weather...│ │          │
+│  │  │  Agent  │─────────│  RAG Tool  │ │          │
+│  │  │ Session1│         │  Weather...│ │          │
 │  │  └─────────┘         └────────────┘ │          │
 │  └─────────────────────────────────────┘          │
 │       │                         │                   │

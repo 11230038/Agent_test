@@ -279,6 +279,7 @@ const sendMessage = async () => {
   const message = inputValue.value.trim()
   if (!message || loading.value) return
 
+  if (loading.value) return  // 上一个请求未完成，排队拒绝
   messages.value.push({ role: 'user', content: message })
   inputValue.value = ''
   errorMessage.value = ''
